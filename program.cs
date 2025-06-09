@@ -17,8 +17,9 @@ public class Program
     public const int PK_PACK_ATTRIBUTES = 0x0004;
 
     // Constants for UnpackFilesW / ProcessFileW (Mode parameter) - Based on WCX SDK
-    public const int PK_EXTRACT = 0x0000;       // Extract file (for ProcessFileW)
-    public const int PK_TEST = 0x0001;          // Test file (for ProcessFileW)
+    public const int PK_EXTRACT = 0x0000;       // For ProcessFileW: Extract file (value 0 according to SDK)
+    public const int PK_TEST = 0x0001;          // For ProcessFileW: Test file
+    public const int PK_SKIP = 0x0002;          // For ProcessFileW: Skip file (cmdTotal.asm uses this for directories)
     public const int PK_OVERWRITE = 0x0008;     // Overwrite existing file (for ProcessFileW)
 
     // WCX SDK Return Codes
@@ -29,13 +30,14 @@ public class Program
     public const int E_UNKNOWN_FORMAT = 3;   // Unknown archive format
     public const int E_BAD_DATA = 4;         // CRC error in data
     public const int E_NO_FILES = 6;         // No files matching pattern
-    public const int E_TOO_MANY_FILES = 7;   // Too many files to add
+    public const int int E_TOO_MANY_FILES = 7;   // Too many files to add
     public const int E_NOT_SUPPORTED = 8;    // Function not supported by plugin
     public const int E_WRITE_ERROR = 9;      // Disk write error
     public const int E_ABORT = 11;           // User abort
 
-    // Structure for ReadHeaderExW (Unicode version)
-    // tHeaderDataExW definition from WCX SDK (plugin.h)
+    // Structure for ReadHeaderExW (Unicode version) - This struct matches WCX SDK
+    // Note: The structure used by cmdTotal.asm for HEADERDATAEXW is DIFFERENT.
+    // If crashes persist on ReadHeaderExW, this struct may need to be adapted to cmdTotal's definition.
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW
     {
@@ -48,60 +50,71 @@ public class Program
         public UInt32 Flags;
 
         // ANSI fields - must be present for correct struct layout, but not used by Wide char APIs
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)] // 260 bytes
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)]
         public byte[] FileNameA;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)] // 260 bytes
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)]
         public byte[] PathA;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]  // 16 bytes
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
         public byte[] ReservedA;
 
         public UInt32 Crc32_low;
         public UInt32 UnPackSize_low;
 
         // Unicode fields
-        // SizeConst is number of WIDE characters (wchar_t), not bytes. 1024 bytes = 512 wide chars.
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] // For wchar_t FileName[512]
         public string FileNameW;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] // For wchar_t Path[512]
         public string PathW;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] // For BYTE ReservedW[256]
-        public byte[] ReservedW; // Use byte[] for raw byte array in C
+        public byte[] ReservedW;
 
-        // Public properties to easily get full path from the struct
         public string FullPathW => PathW + (string.IsNullOrEmpty(PathW) ? "" : "\\") + FileNameW;
     }
 
-    // --- P/Invoke Declarations (Updated/Added) ---
+    // NEW: Structure for OpenArchiveW based on cmdTotal.asm's OPENARCHIVEDATAAW
+    // This differs from the standard WCX SDK's OpenArchiveW signature
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct tOpenArchiveDataExW
+    {
+        public IntPtr ArcName;      // Pointer to the archive name string (wchar_t*)
+        public int OpenMode;        // Open mode (0 for list/test, 1 for extract)
+        public int OpenResult;      // Result code from plugin (usually 0 for success)
+        public IntPtr CmtBuf;       // Pointer to comment buffer (not used in our case)
+        public int CmtBufSize;
+        public int CmtSize;
+        public int CmtState;
+    }
 
-    // Original PackFilesW for compression
+
+    // --- P/Invoke Declarations ---
+
+    // Original PackFilesW for compression (SubPath made nullable to fix warning)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int PackFilesW(
         [MarshalAs(UnmanagedType.LPWStr)] string PackedFile,
-        [MarshalAs(UnmanagedType.LPWStr)] string SubPath,
+        [MarshalAs(UnmanagedType.LPWStr)] string? SubPath, // Made nullable as per warning fix
         int Flags,
         [MarshalAs(UnmanagedType.LPWStr)] string FileList);
 
-    // New functions for decompression (Open/Read/Process/Close)
-    // HANDLE __stdcall OpenArchiveW(char* ArchiveName, int OpenMode)
+    // NEW: OpenArchiveW, accepting the tOpenArchiveDataExW struct as seen in cmdTotal.asm
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern IntPtr OpenArchiveW([MarshalAs(UnmanagedType.LPWStr)] string ArchiveName, int OpenMode); // Returns a handle (IntPtr)
+    private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataExW OpenArchiveData);
 
-    // int __stdcall ReadHeaderExW(HANDLE hArc, tHeaderDataExW *HeaderData)
-    // Note: When passing a struct by reference to a C function, use 'ref' in C#
+    // ReadHeaderExW remains the same (assuming SDK struct is correct for this one)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW HeaderData);
 
-    // int __stdcall ProcessFileW(HANDLE hArc, int Operation, char* DestPath, char* DestName)
+    // ProcessFileW remains the same (parameters are handled in the call site)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int ProcessFileW(IntPtr hArc, int Operation,
-        [MarshalAs(UnmanagedType.LPWStr)] string DestPath,
-        [MarshalAs(UnmanagedType.LPWStr)] string DestName);
+        [MarshalAs(UnmanagedType.LPWStr)] string? DestPath, // Made nullable
+        [MarshalAs(UnmanagedType.LPWStr)] string? DestName); // Made nullable
 
-    // int __stdcall CloseArchive(HANDLE hArc)
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall)] // CharSet is not relevant for handle only
+    // CloseArchive remains the same
+    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall)]
     private static extern int CloseArchive(IntPtr hArc);
 
-    // --- Helper Methods (unchanged) ---
+    // --- Helper Methods ---
     private static string JoinNullSeparated(IEnumerable<string> items)
     {
         if (items == null || !items.Any())
@@ -118,11 +131,11 @@ public class Program
         return sb.ToString();
     }
 
-    // --- Main Entry Point (unchanged) ---
+    // --- Main Entry Point ---
     public static int Main(string[] args)
     {
         Console.WriteLine("--------------------------------------------------");
-        Console.WriteLine("NKX Tool - NKX pack / unpack tool");
+        Console.WriteLine("NKX Direct Utility by Manzing (C# Edition)");
         Console.WriteLine("--------------------------------------------------");
 
         if (args.Length < 3)
@@ -141,7 +154,7 @@ public class Program
         Console.WriteLine($"Using plugin: {PluginDllName} (expected in executable directory)");
         Console.WriteLine("--------------------------------------------------");
 
-        int resultCode = 0; // 0 for success, non-zero for error
+        int resultCode = 0;
 
         try
         {
@@ -151,7 +164,6 @@ public class Program
                     resultCode = CompressFolder(sourcePath, destinationPath);
                     break;
                 case "decompress":
-                    // Call the NEW decompression logic
                     resultCode = DecompressArchiveViaOpenReadProcess(sourcePath, destinationPath);
                     break;
                 default:
@@ -178,6 +190,14 @@ public class Program
             Console.ResetColor();
             resultCode = 1;
         }
+        catch (BadImageFormatException bife)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"Error: The plugin '{PluginDllName}' is not compatible with this application. Ensure you are using the correct 32-bit or 64-bit version of the plugin.");
+            Console.Error.WriteLine($"Details: {bife.Message}");
+            Console.ResetColor();
+            resultCode = 1;
+        }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
@@ -201,7 +221,7 @@ public class Program
         return resultCode;
     }
 
-    // --- CompressFolder (unchanged) ---
+    // --- CompressFolder ---
     private static int CompressFolder(string sourceFolderPath, string destinationDirPath)
     {
         if (!Directory.Exists(sourceFolderPath))
@@ -224,15 +244,17 @@ public class Program
         List<string> filesToPack = new List<string>();
         foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
         {
+            // Get relative path for packing
             filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
         }
 
         string fileListString = JoinNullSeparated(filesToPack);
-        int packFlags = PK_PACK_SAVE_PATHS;
+        int packFlags = PK_PACK_SAVE_PATHS; // Save paths in the archive
 
         string originalCurrentDirectory = Environment.CurrentDirectory;
         try
         {
+            // The plugin often expects the current directory to be the root of the files being packed
             Environment.CurrentDirectory = sourceFolderPath;
             int result = PackFilesW(outputNkxFileName, null, packFlags, fileListString);
 
@@ -267,7 +289,7 @@ public class Program
         }
     }
 
-    // --- NEW DecompressArchiveViaOpenReadProcess (replaces previous DecompressArchive) ---
+    // --- DecompressArchiveViaOpenReadProcess ---
     private static int DecompressArchiveViaOpenReadProcess(string sourceNkxPath, string destinationDirPath)
     {
         if (!File.Exists(sourceNkxPath) || !sourceNkxPath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
@@ -287,17 +309,30 @@ public class Program
         IntPtr hArc = IntPtr.Zero; // Handle to the archive
         int result = PK_OK;
 
+        // NEW: Prepare tOpenArchiveDataExW struct for OpenArchiveW call
+        tOpenArchiveDataExW openArcData = new tOpenArchiveDataExW();
+        // cmdTotal uses 1 for extraction mode, 0 for list/test
+        openArcData.OpenMode = 1; // PK_OM_EXTRACT based on cmdTotal.asm
+
+        // Marshal the archive name string to an unmanaged pointer for ArcName field
+        IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
+        openArcData.ArcName = pArcName; // Assign the pointer to the struct field
+
         try
         {
-            // Open the archive
-            // OpenMode = 0 for normal opening (for reading)
-            hArc = OpenArchiveW(sourceNkxPath, 0);
+            // Open the archive using the struct
+            hArc = OpenArchiveW(ref openArcData);
+
+            // Free the unmanaged string memory after the call
+            Marshal.FreeHGlobal(pArcName);
+            pArcName = IntPtr.Zero; // Important: set to null after freeing
+
             if (hArc == IntPtr.Zero)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
-                Console.Error.WriteLine($"Error: Could not open archive '{sourceNkxPath}'. Plugin returned invalid handle.");
+                Console.Error.WriteLine($"Error: Could not open archive '{sourceNkxPath}'. Plugin returned invalid handle. OpenResult: {openArcData.OpenResult}");
                 Console.ResetColor();
-                return E_BAD_ARCHIVE; // Or more specific error if OpenArchiveW returned an error code directly
+                return E_BAD_ARCHIVE;
             }
 
             tHeaderDataExW headerData = new tHeaderDataExW();
@@ -322,11 +357,10 @@ public class Program
                 }
 
                 // Construct the full destination path for the current file
-                // headerData.PathW contains the subfolders, headerData.FileNameW is the file name
-                string relativeFilePath = Path.Combine(headerData.PathW, headerData.FileNameW).Replace('/', Path.DirectorySeparatorChar); // Ensure correct path separators
+                string relativeFilePath = Path.Combine(headerData.PathW, headerData.FileNameW).Replace('/', Path.DirectorySeparatorChar);
 
-                string fullDestinationPath = Path.Combine(destinationDirPath, relativeFilePath);
-                string fileDirectory = Path.GetDirectoryName(fullDestinationPath);
+                string fullDestinationFilePath = Path.Combine(destinationDirPath, relativeFilePath);
+                string fileDirectory = Path.GetDirectoryName(fullDestinationFilePath);
 
                 // Create subdirectories if they don't exist
                 if (!string.IsNullOrEmpty(fileDirectory) && !Directory.Exists(fileDirectory))
@@ -336,12 +370,18 @@ public class Program
 
                 Console.WriteLine($"  Extracting: {relativeFilePath}");
 
-                // Process (extract) the current file
-                int processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, destinationDirPath, relativeFilePath); // DestPath is base, DestName is relative
-                // Note: Some WCX plugins expect DestPath to be the final directory, and DestName to be just the filename.
-                // Others expect DestPath as the root and DestName as the relative path.
-                // The current implementation passes destinationDirPath as DestPath and relativeFilePath as DestName.
-                // This is a common pattern for ProcessFileW when extracting based on ReadHeaderExW.
+                int processResult;
+                // Implement cmdTotal.asm's logic for ProcessFileW parameters
+                // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
+                // For files, cmdTotal passes DestPath=NULL, DestName=fullFilePath and PK_EXTRACT.
+                if ((headerData.FileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
+                {
+                    processResult = ProcessFileW(hArc, PK_SKIP, null, null);
+                }
+                else // It's a file
+                {
+                    processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, null, fullDestinationFilePath);
+                }
 
                 if (processResult != PK_OK)
                 {
@@ -367,7 +407,11 @@ public class Program
         }
         finally
         {
-            // Always close the archive handle
+            // Always ensure unmanaged memory is freed and archive handle is closed
+            if (pArcName != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pArcName);
+            }
             if (hArc != IntPtr.Zero)
             {
                 CloseArchive(hArc);
@@ -376,7 +420,7 @@ public class Program
         }
     }
 
-    // --- ShowUsage (unchanged) ---
+    // --- ShowUsage ---
     private static void ShowUsage()
     {
         Console.WriteLine("Usage: NkxTool <operation> <sourcePath> <destinationPath>");
