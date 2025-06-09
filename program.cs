@@ -30,7 +30,7 @@ public class Program
     public const int E_UNKNOWN_FORMAT = 3;   // Unknown archive format
     public const int E_BAD_DATA = 4;         // CRC error in data
     public const int E_NO_FILES = 6;         // No files matching pattern
-    public const int int E_TOO_MANY_FILES = 7;   // Too many files to add
+    public const int E_TOO_MANY_FILES = 7;   // Too many files to add
     public const int E_NOT_SUPPORTED = 8;    // Function not supported by plugin
     public const int E_WRITE_ERROR = 9;      // Disk write error
     public const int E_ABORT = 11;           // User abort
