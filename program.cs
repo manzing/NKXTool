@@ -26,7 +26,7 @@ public class Program
     public const int PK_OM_EXTRACT = 1;     // From wcxplugin.pas: PK_OM_EXTRACT= 1
 
     // WCX SDK Return Codes - BASED ON wcxplugin.pas (CRITICAL CHANGES!)
-    public const int E_SUCCESS = 0;          // Success
+    public const int E_SUCCESS = 0;          // Success (formerly PK_OK)
     public const int E_END_ARCHIVE = 10;     // No more files in archive
     public const int E_NO_MEMORY = 11;       // Not enough memory
     public const int E_BAD_DATA = 12;        // Data is bad
@@ -42,6 +42,7 @@ public class Program
     public const int E_NO_FILES = 22;        // No files found
     public const int E_TOO_MANY_FILES = 23;  // Too many files to pack
     public const int E_NOT_SUPPORTED = 24;   // Function not supported
+    public const int E_UNKNOWN = 32768;      // Unknown error (Added from wcxplugin.pas)
 
 
     // Structure for ReadHeaderExW based on wcxplugin.pas THeaderDataExW
@@ -264,19 +265,19 @@ public class Program
             Environment.CurrentDirectory = sourceFolderPath;
             int result = PackFilesW(outputNkxFileName, null, packFlags, fileListString);
 
-            if (result == PK_OK)
+            if (result == E_SUCCESS) // Changed from PK_OK
             {
                 if (File.Exists(outputNkxFileName))
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"Compression successful: '{outputNkxFileName}'");
                     Console.ResetColor();
-                    return PK_OK;
+                    return E_SUCCESS; // Changed from PK_OK
                 }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.Error.WriteLine($"Error: Plugin reported success (0) but NKX file not found at '{outputNkxFileName}'.");
+                    Console.Error.WriteLine($"Error: Plugin reported success ({E_SUCCESS}) but NKX file not found at '{outputNkxFileName}'.");
                     Console.ResetColor();
                     return E_EWRITE; // Use new error code
                 }
