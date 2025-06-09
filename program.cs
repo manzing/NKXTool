@@ -19,13 +19,14 @@ public class Program
     // Constants for UnpackFilesW / ProcessFileW (Mode parameter) - Based on wcxplugin.pas
     public const int PK_SKIP = 0;           // From wcxplugin.pas: PK_SKIP= 0
     public const int PK_TEST = 1;           // From wcxplugin.pas: PK_TEST= 1
-    public const int PK_EXTRACT = 2;        // From wcxplugin.pas: PK_EXTRACT= 2 (CRITICAL CHANGE!)
+    public const int PK_EXTRACT = 2;        // From wcxplugin.pas: PK_EXTRACT= 2
+    public const int PK_OVERWRITE = 0x0008; // Re-added based on cmdTotal.asm usage
 
     // Unpacking flags for OpenArchiveW - Based on wcxplugin.pas
     public const int PK_OM_LIST = 0;
     public const int PK_OM_EXTRACT = 1;     // From wcxplugin.pas: PK_OM_EXTRACT= 1
 
-    // WCX SDK Return Codes - BASED ON wcxplugin.pas (CRITICAL CHANGES!)
+    // WCX SDK Return Codes - BASED ON wcxplugin.pas
     public const int E_SUCCESS = 0;          // Success (formerly PK_OK)
     public const int E_END_ARCHIVE = 10;     // No more files in archive
     public const int E_NO_MEMORY = 11;       // Not enough memory
@@ -265,21 +266,21 @@ public class Program
             Environment.CurrentDirectory = sourceFolderPath;
             int result = PackFilesW(outputNkxFileName, null, packFlags, fileListString);
 
-            if (result == E_SUCCESS) // Changed from PK_OK
+            if (result == E_SUCCESS)
             {
                 if (File.Exists(outputNkxFileName))
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
                     Console.WriteLine($"Compression successful: '{outputNkxFileName}'");
                     Console.ResetColor();
-                    return E_SUCCESS; // Changed from PK_OK
+                    return E_SUCCESS;
                 }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Plugin reported success ({E_SUCCESS}) but NKX file not found at '{outputNkxFileName}'.");
                     Console.ResetColor();
-                    return E_EWRITE; // Use new error code
+                    return E_EWRITE;
                 }
             }
             else
@@ -304,7 +305,7 @@ public class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"Error: Source file not found or is not a .nkx archive: '{sourceNkxPath}'");
             Console.ResetColor();
-            return E_BAD_ARCHIVE; // Use new error code
+            return E_BAD_ARCHIVE;
         }
 
         Directory.CreateDirectory(destinationDirPath); // Ensure destination exists
@@ -314,11 +315,11 @@ public class Program
         Console.ResetColor();
 
         IntPtr hArc = IntPtr.Zero; // Handle to the archive
-        int result = E_SUCCESS; // Use new success code
+        int result = E_SUCCESS;
 
         // Prepare tOpenArchiveDataW_WCXPlugin struct for OpenArchiveW call
         tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin();
-        openArcData.OpenMode = PK_OM_EXTRACT; // Use constant from wcxplugin.pas
+        openArcData.OpenMode = PK_OM_EXTRACT;
 
         // Marshal the archive name string to an unmanaged pointer for ArcName field
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
@@ -338,7 +339,7 @@ public class Program
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.Error.WriteLine($"Error: Could not open archive '{sourceNkxPath}'. Plugin returned invalid handle. OpenResult: {openArcData.OpenResult}");
                 Console.ResetColor();
-                return E_BAD_ARCHIVE; // Use new error code
+                return E_BAD_ARCHIVE;
             }
 
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
@@ -349,12 +350,12 @@ public class Program
             {
                 result = ReadHeaderExW(hArc, ref headerData);
 
-                if (result == E_END_ARCHIVE) // Use new error code
+                if (result == E_END_ARCHIVE)
                 {
                     Console.WriteLine("End of archive.");
                     break;
                 }
-                else if (result != E_SUCCESS) // Use new success code
+                else if (result != E_SUCCESS)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to read header. Return Code: {result} (Check WCX SDK for meaning).");
@@ -380,31 +381,33 @@ public class Program
 
                 try
                 {
-                    // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
-                    // For files, cmdTotal passes DestPath=NULL, DestName=fullFilePath and PK_EXTRACT.
                     if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
                     {
+                        // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
                         processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
                     }
                     else // It's a file
                     {
-                        // Allocate memory for the destination path string explicitly
-                        pDestName = Marshal.StringToHGlobalUni(fullDestinationFilePath);
-                        // CRITICAL CHANGE: Use PK_EXTRACT=2, remove PK_OVERWRITE
-                        processResult = ProcessFileW(hArc, PK_EXTRACT, IntPtr.Zero, pDestName);
+                        // Allocate memory for the full destination file path string.
+                        // Based on cmdTotal.asm, this is passed as DestPath, and DestName is NULL.
+                        pDestPath = Marshal.StringToHGlobalUni(fullDestinationFilePath);
+                        
+                        // Use PK_EXTRACT and PK_OVERWRITE as per cmdTotal.asm
+                        processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
                     }
                 }
                 finally
                 {
                     // Ensure the explicitly allocated memory is freed after the call
-                    if (pDestName != IntPtr.Zero)
+                    if (pDestPath != IntPtr.Zero)
                     {
-                        Marshal.FreeHGlobal(pDestName);
+                        Marshal.FreeHGlobal(pDestPath);
                     }
+                    // pDestName is not used for files if pDestPath is set, and is IntPtr.Zero for directories.
                 }
 
 
-                if (processResult != E_SUCCESS) // Use new success code
+                if (processResult != E_SUCCESS)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to process file '{relativeFilePath}'. Return Code: {processResult}.");
@@ -417,14 +420,14 @@ public class Program
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Decompression successful. Extracted {fileCount} files from '{sourceNkxPath}'.");
             Console.ResetColor();
-            return E_SUCCESS; // Use new success code
+            return E_SUCCESS;
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"An unexpected error occurred during decompression: {ex.Message}");
             Console.ResetColor();
-            return E_UNKNOWN; // Use new error code
+            return E_UNKNOWN;
         }
         finally
         {
