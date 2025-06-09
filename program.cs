@@ -394,7 +394,7 @@ public class Program
                 Console.WriteLine($"  Debugging: relativeFilePath = '{relativeFilePath}'");
                 Console.WriteLine($"  Debugging: fullDestinationFilePath = '{fullDestinationFilePath}'");
                 Console.WriteLine($"  Debugging: hdFileAttr = {headerData.hdFileAttr}");
-                Console.WriteLine($"  Debugging: Operation for ProcessFileW = {((headerData.hdFileAttr & 0x10) != 0 ? "PK_SKIP" : "PK_EXTRACT | PK_OVERWRITE")}");
+                Console.WriteLine($"  Debugging: Actual ProcessFileW Mode = {processResult}"); 
                 Console.WriteLine($"  Debugging: About to call ProcessFileW for file: {fullDestinationFilePath}");
                 // --- FIN LIGNES DE DÉBOGAGE ---
 
