@@ -408,9 +408,8 @@ public class Program
                     if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
                     {
                         // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
-                        // processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
-                        // Nouveau test : retire PK_OVERWRITE
-                           processResult = ProcessFileW(hArc, PK_EXTRACT, pDestPath, IntPtr.Zero); 
+                        processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
+
                     }
                     else // It's a file
                     {
@@ -419,7 +418,8 @@ public class Program
                         pDestPath = Marshal.StringToHGlobalUni(fullDestinationFilePath);
                         
                         // Use PK_EXTRACT and PK_OVERWRITE as per cmdTotal.asm
-                        processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
+                        //processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
+                        processResult = ProcessFileW(hArc, PK_EXTRACT, pDestPath, IntPtr.Zero);
                     }
                 }
                 finally
