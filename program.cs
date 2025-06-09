@@ -169,7 +169,18 @@ public class Program
             switch (operation)
             {
                 case "compress":
-                    resultCode = CompressFolder(sourcePath, destinationPath);
+                    // Determine the actual output .nkx file path
+                    string folderToCompress = sourcePath; // This is the folder
+                    string outputNkxFilePath = destinationPath; // This could be a file or a directory
+
+                    if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // If the destination is a directory, append the folder name with .nkx extension
+                        // Example: source = "C:\mydata", dest = "C:\archives" -> "C:\archives\mydata.nkx"
+                        string folderNameForArchive = new DirectoryInfo(folderToCompress).Name;
+                        outputNkxFilePath = Path.Combine(outputNkxFilePath, $"{folderNameForArchive}.nkx");
+                    }
+                    resultCode = CompressFolder(folderToCompress, outputNkxFilePath);
                     break;
                 case "decompress":
                     resultCode = DecompressArchiveViaOpenReadProcess(sourcePath, destinationPath);
@@ -230,7 +241,8 @@ public class Program
     }
 
     // --- CompressFolder ---
-    private static int CompressFolder(string sourceFolderPath, string destinationDirPath)
+    // Now takes the explicit output NKX file path, not just a directory
+    private static int CompressFolder(string sourceFolderPath, string outputNkxFilePath)
     {
         if (!Directory.Exists(sourceFolderPath))
         {
@@ -240,13 +252,15 @@ public class Program
             return 1;
         }
 
-        Directory.CreateDirectory(destinationDirPath);
-
-        string folderName = new DirectoryInfo(sourceFolderPath).Name;
-        string outputNkxFileName = Path.Combine(destinationDirPath, $"{folderName}.nkx");
+        // Ensure the destination directory for the NKX file exists
+        string outputDirectory = Path.GetDirectoryName(outputNkxFilePath);
+        if (!string.IsNullOrEmpty(outputDirectory) && !Directory.Exists(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"Compressing '{sourceFolderPath}' into '{outputNkxFileName}'...");
+        Console.WriteLine($"Compressing '{sourceFolderPath}' into '{outputNkxFilePath}'...");
         Console.ResetColor();
 
         List<string> filesToPack = new List<string>();
@@ -264,21 +278,21 @@ public class Program
         {
             // The plugin often expects the current directory to be the root of the files being packed
             Environment.CurrentDirectory = sourceFolderPath;
-            int result = PackFilesW(outputNkxFileName, null, packFlags, fileListString);
+            int result = PackFilesW(outputNkxFilePath, null, packFlags, fileListString);
 
             if (result == E_SUCCESS)
             {
-                if (File.Exists(outputNkxFileName))
+                if (File.Exists(outputNkxFilePath))
                 {
                     Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"Compression successful: '{outputNkxFileName}'");
+                    Console.WriteLine($"Compression successful: '{outputNkxFilePath}'");
                     Console.ResetColor();
                     return E_SUCCESS;
                 }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
-                    Console.Error.WriteLine($"Error: Plugin reported success ({E_SUCCESS}) but NKX file not found at '{outputNkxFileName}'.");
+                    Console.Error.WriteLine($"Error: Plugin reported success ({E_SUCCESS}) but NKX file not found at '{outputNkxFilePath}'.");
                     Console.ResetColor();
                     return E_EWRITE;
                 }
@@ -451,12 +465,14 @@ public class Program
         Console.WriteLine("Operations:");
         Console.WriteLine("  compress    - Compresses a folder into an NKX archive.");
         Console.WriteLine("              - <sourcePath>: Path to the folder to compress.");
-        Console.WriteLine("              - <destinationPath>: Directory where the NKX will be created.");
+        Console.WriteLine("              - <destinationPath>: Directory where the NKX will be created, OR");
+        Console.WriteLine("                                   The full path and name of the output .nkx file.");
         Console.WriteLine("  decompress - Decompresses an NKX archive.");
         Console.WriteLine("              - <sourcePath>: Path to the .nkx file.");
         Console.WriteLine("              - <destinationPath>: Directory where contents will be extracted.");
         Console.WriteLine("\nExamples:");
-        Console.WriteLine("  NkxTool compress \"C:\\MySamples\\Pianos\" \"C:\\MyNkxArchives\"");
+        Console.WriteLine("  NkxTool compress \"C:\\MySamples\\Pianos\" \"C:\\MyNkxArchives\"      (creates C:\\MyNkxArchives\\Pianos.nkx)");
+        Console.WriteLine("  NkxTool compress \"C:\\MySamples\\Pianos\" \"C:\\MyArchives\\PianoBackup.nkx\" (creates C:\\MyArchives\\PianoBackup.nkx)");
         Console.WriteLine("  NkxTool decompress \"C:\\MyNkxArchives\\Pianos.nkx\" \"C:\\ExtractedSamples\"");
     }
 }
