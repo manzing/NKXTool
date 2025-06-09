@@ -389,15 +389,14 @@ public class Program
 
                 Console.WriteLine($"  Extracting: {relativeFilePath}");
 
-                // --- NOUVELLES LIGNES DE DÉBOGAGE ---
+                // --- LIGNES DE DÉBOGAGE ---
                 Console.WriteLine($"  Debugging: hdFileNameW = '{headerData.hdFileNameW}'");
                 Console.WriteLine($"  Debugging: relativeFilePath = '{relativeFilePath}'");
                 Console.WriteLine($"  Debugging: fullDestinationFilePath = '{fullDestinationFilePath}'");
-                // Ligne corrigée ci-dessous
                 Console.WriteLine($"  Debugging: hdFileAttr = {headerData.hdFileAttr}");
                 Console.WriteLine($"  Debugging: Operation for ProcessFileW = {((headerData.hdFileAttr & 0x10) != 0 ? "PK_SKIP" : "PK_EXTRACT | PK_OVERWRITE")}");
                 Console.WriteLine($"  Debugging: About to call ProcessFileW for file: {fullDestinationFilePath}");
-                // --- FIN NOUVELLES LIGNES DE DÉBOGAGE ---
+                // --- FIN LIGNES DE DÉBOGAGE ---
 
                 int processResult;
                 IntPtr pDestPath = IntPtr.Zero;
@@ -409,7 +408,6 @@ public class Program
                     {
                         // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
                         processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
-
                     }
                     else // It's a file
                     {
@@ -417,9 +415,10 @@ public class Program
                         // Based on cmdTotal.asm, this is passed as DestPath, and DestName is NULL.
                         pDestPath = Marshal.StringToHGlobalUni(fullDestinationFilePath);
                         
-                        // Use PK_EXTRACT and PK_OVERWRITE as per cmdTotal.asm
-                        //processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
+                        // **** C'EST LA LIGNE À MODIFIER POUR LE TEST SANS PK_OVERWRITE ****
+                        // Modifiez-la pour qu'elle ressemble exactement à ceci :
                         processResult = ProcessFileW(hArc, PK_EXTRACT, pDestPath, IntPtr.Zero);
+                        // **** AVANT C'ÉTAIT : processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
                     }
                 }
                 finally
