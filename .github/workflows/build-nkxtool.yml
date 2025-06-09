@@ -25,7 +25,7 @@ jobs:
       run: dotnet restore NkxTool.csproj # Assurez-vous que le chemin est correct si NkxTool.csproj n'est pas à la racine
 
     - name: Build and Publish NkxTool # Étape 4: Compiler et publier le projet
-      run: dotnet publish NkxTool.csproj -c Release -o publish-output -r win-x86 /p:PublishSingleFile=true --no-restore
+      run: dotnet publish NkxTool.csproj -c Release -p:PlatformTarget=x86 -o publish-output -r win-x86 /p:PublishSingleFile=true --no-restore
       # -c Release: Compile en mode Release
       # -o publish-output: Publie les fichiers dans un dossier nommé 'publish-output'
       # -r win-x64: Cible la plateforme Windows 64 bits
