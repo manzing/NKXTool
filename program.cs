@@ -30,22 +30,19 @@ public class Program
     public const int E_UNKNOWN_FORMAT = 3;   // Unknown archive format
     public const int E_BAD_DATA = 4;         // CRC error in data
     public const int E_NO_FILES = 6;         // No files matching pattern
-    public const int E_TOO_MANY_FILES = 7;   // Too many files to add (FIXED TYPO)
+    public const int E_TOO_MANY_FILES = 7;   // Too many files to add
     public const int E_NOT_SUPPORTED = 8;    // Function not supported by plugin
     public const int E_WRITE_ERROR = 9;      // Disk write error
     public const int E_ABORT = 11;           // User abort
 
-    // NEW: Structure for ReadHeaderExW based on cmdTotal.asm's HEADERDATAEXW definition
-    // This is a custom struct layout that does NOT match the official WCX SDK's tHeaderDataExW.
-    // We are adopting this because cmdTotal.asm successfully interacts with inNKX.wcx.
+    // Structure for ReadHeaderExW based on cmdTotal.asm's HEADERDATAEXW definition
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW_cmdTotal_Style
     {
-        // Sizes from cmdTotal.asm's HEADERDATAEXW (1024 words = 2048 bytes for strings)
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] // wchar_t[1024] - ArcName, but in this struct context is likely ArcName within header
-        public string hdArcNameW; // Not in standard SDK tHeaderDataExW, but first field in cmdTotal's HEADERDATAEXW
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)]
+        public string hdArcNameW;
 
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] // wchar_t[1024] - FileName
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)]
         public string hdFileNameW;
 
         public UInt32 hdFlags;
@@ -57,30 +54,26 @@ public class Program
         public UInt32 hdFileCRC;
         public UInt32 hdFileTime;
         public UInt32 hdUnpVer;
-        public UInt32 hdMethod;
+3        public UInt32 hdMethod;
         public UInt32 hdFileAttr;
-        public IntPtr hdCmtBuf; // dd ? -> pointer
+        public IntPtr hdCmtBuf;
         public UInt32 hdCmtBufSize;
         public UInt32 hdCmtSize;
         public UInt32 hdCmtState;
 
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)] // 1024 bytes for Reserved
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)]
         public byte[] hdReserved;
-
-        // Note: cmdTotal's HEADERDATAEXW does NOT contain a separate PathW field.
-        // The hdFileNameW field will likely contain the full relative path + filename (e.g., "SubDir\File.wav").
     }
 
 
-    // NEW: Structure for OpenArchiveW based on cmdTotal.asm's OPENARCHIVEDATAAW
-    // This differs from the standard WCX SDK's OpenArchiveW signature
+    // Structure for OpenArchiveW based on cmdTotal.asm's OPENARCHIVEDATAAW
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tOpenArchiveDataExW
     {
-        public IntPtr ArcName;      // Pointer to the archive name string (wchar_t*)
-        public int OpenMode;        // Open mode (0 for list/test, 1 for extract)
-        public int OpenResult;      // Result code from plugin (usually 0 for success)
-        public IntPtr CmtBuf;       // Pointer to comment buffer (not used in our case)
+        public IntPtr ArcName;
+        public int OpenMode;
+        public int OpenResult;
+        public IntPtr CmtBuf;
         public int CmtBufSize;
         public int CmtSize;
         public int CmtState;
@@ -89,29 +82,25 @@ public class Program
 
     // --- P/Invoke Declarations ---
 
-    // Original PackFilesW for compression (SubPath made nullable to fix warning)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int PackFilesW(
         [MarshalAs(UnmanagedType.LPWStr)] string PackedFile,
-        [MarshalAs(UnmanagedType.LPWStr)] string? SubPath, // Made nullable as per warning fix
+        [MarshalAs(UnmanagedType.LPWStr)] string? SubPath,
         int Flags,
         [MarshalAs(UnmanagedType.LPWStr)] string FileList);
 
-    // NEW: OpenArchiveW, accepting the tOpenArchiveDataExW struct as seen in cmdTotal.asm
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataExW OpenArchiveData);
 
-    // ReadHeaderExW now uses the custom struct based on cmdTotal.asm
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_cmdTotal_Style HeaderData);
 
-    // ProcessFileW remains the same (parameters are handled in the call site)
+    // MODIFIED: ProcessFileW now takes IntPtr for string parameters
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int ProcessFileW(IntPtr hArc, int Operation,
-        [MarshalAs(UnmanagedType.LPWStr)] string? DestPath, // Made nullable
-        [MarshalAs(UnmanagedType.LPWStr)] string? DestName); // Made nullable
+        IntPtr DestPath, // Changed from string?
+        IntPtr DestName); // Changed from string?
 
-    // CloseArchive remains the same
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall)]
     private static extern int CloseArchive(IntPtr hArc);
 
@@ -312,12 +301,11 @@ public class Program
 
         // Prepare tOpenArchiveDataExW struct for OpenArchiveW call
         tOpenArchiveDataExW openArcData = new tOpenArchiveDataExW();
-        // cmdTotal uses 1 for extraction mode, 0 for list/test
         openArcData.OpenMode = 1; // PK_OM_EXTRACT based on cmdTotal.asm
 
         // Marshal the archive name string to an unmanaged pointer for ArcName field
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
-        openArcData.ArcName = pArcName; // Assign the pointer to the struct field
+        openArcData.ArcName = pArcName;
 
         try
         {
@@ -326,7 +314,7 @@ public class Program
 
             // Free the unmanaged string memory after the call
             Marshal.FreeHGlobal(pArcName);
-            pArcName = IntPtr.Zero; // Important: set to null after freeing
+            pArcName = IntPtr.Zero;
 
             if (hArc == IntPtr.Zero)
             {
@@ -336,7 +324,6 @@ public class Program
                 return E_BAD_ARCHIVE;
             }
 
-            // NEW: Use the custom header data struct
             tHeaderDataExW_cmdTotal_Style headerData = new tHeaderDataExW_cmdTotal_Style();
             int fileCount = 0;
 
@@ -348,20 +335,17 @@ public class Program
                 if (result == E_END_ARCHIVE)
                 {
                     Console.WriteLine("End of archive.");
-                    break; // No more files
+                    break;
                 }
                 else if (result != PK_OK)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to read header. Return Code: {result} (Check WCX SDK for meaning).");
                     Console.ResetColor();
-                    return result; // Error reading header
+                    return result;
                 }
 
-                // NEW: Construct the full destination path using hdFileNameW directly
-                // (Assuming hdFileNameW now contains the full relative path including directory)
                 string relativeFilePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-
                 string fullDestinationFilePath = Path.Combine(destinationDirPath, relativeFilePath);
                 string fileDirectory = Path.GetDirectoryName(fullDestinationFilePath);
 
@@ -374,24 +358,40 @@ public class Program
                 Console.WriteLine($"  Extracting: {relativeFilePath}");
 
                 int processResult;
-                // Implement cmdTotal.asm's logic for ProcessFileW parameters
-                // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
-                // For files, cmdTotal passes DestPath=NULL, DestName=fullFilePath and PK_EXTRACT.
-                if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
+                IntPtr pDestPath = IntPtr.Zero;
+                IntPtr pDestName = IntPtr.Zero;
+
+                try
                 {
-                    processResult = ProcessFileW(hArc, PK_SKIP, null, null);
+                    // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
+                    // For files, cmdTotal passes DestPath=NULL, DestName=fullFilePath and PK_EXTRACT.
+                    if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
+                    {
+                        processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
+                    }
+                    else // It's a file
+                    {
+                        // Allocate memory for the destination path string explicitly
+                        pDestName = Marshal.StringToHGlobalUni(fullDestinationFilePath);
+                        processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, IntPtr.Zero, pDestName);
+                    }
                 }
-                else // It's a file
+                finally
                 {
-                    processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, null, fullDestinationFilePath);
+                    // Ensure the explicitly allocated memory is freed after the call
+                    if (pDestName != IntPtr.Zero)
+                    {
+                        Marshal.FreeHGlobal(pDestName);
+                    }
                 }
+
 
                 if (processResult != PK_OK)
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to process file '{relativeFilePath}'. Return Code: {processResult}.");
                     Console.ResetColor();
-                    return processResult; // Error processing file
+                    return processResult;
                 }
                 fileCount++;
             }
@@ -406,7 +406,7 @@ public class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"An unexpected error occurred during decompression: {ex.Message}");
             Console.ResetColor();
-            return E_ABORT; // Indicate generic abort/failure
+            return E_ABORT;
         }
         finally
         {
