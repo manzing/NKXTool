@@ -394,7 +394,6 @@ public class Program
                 Console.WriteLine($"  Debugging: relativeFilePath = '{relativeFilePath}'");
                 Console.WriteLine($"  Debugging: fullDestinationFilePath = '{fullDestinationFilePath}'");
                 Console.WriteLine($"  Debugging: hdFileAttr = {headerData.hdFileAttr}");
-                Console.WriteLine($"  Debugging: Actual ProcessFileW Mode = {processResult}"); 
                 Console.WriteLine($"  Debugging: About to call ProcessFileW for file: {fullDestinationFilePath}");
                 // --- FIN LIGNES DE DÉBOGAGE ---
 
@@ -407,6 +406,7 @@ public class Program
                     if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
                     {
                         // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
+                        Console.WriteLine($"  Debugging: Operation for ProcessFileW = PK_SKIP (Directory)");
                         processResult = ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
                     }
                     else // It's a file
@@ -417,6 +417,7 @@ public class Program
                         
                         // **** C'EST LA LIGNE À MODIFIER POUR LE TEST SANS PK_OVERWRITE ****
                         // Modifiez-la pour qu'elle ressemble exactement à ceci :
+                        Console.WriteLine($"  Debugging: Operation for ProcessFileW = PK_EXTRACT (File)");
                         processResult = ProcessFileW(hArc, PK_EXTRACT, pDestPath, IntPtr.Zero);
                         // **** AVANT C'ÉTAIT : processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, pDestPath, IntPtr.Zero);
                     }
