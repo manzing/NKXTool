@@ -389,6 +389,15 @@ public class Program
 
                 Console.WriteLine($"  Extracting: {relativeFilePath}");
 
+                // --- NOUVELLES LIGNES DE DÉBOGAGE ---
+                Console.WriteLine($"  Debugging: hdFileNameW = '{headerData.hdFileNameW}'");
+                Console.WriteLine($"  Debugging: relativeFilePath = '{relativeFilePath}'");
+                Console.WriteLine($"  Debugging: fullDestinationFilePath = '{fullDestinationFilePath}'");
+                Console.WriteLine($"  Debugging: hdFileAttr = {headerData.hdFileAttr}");
+                Console.WriteLine($"  Debugging: Operation for ProcessFileW = {(headerData.hdFileAttr & 0x10) != 0 ? "PK_SKIP" : "PK_EXTRACT | PK_OVERWRITE"}");
+                Console.WriteLine($"  Debugging: About to call ProcessFileW for file: {fullDestinationFilePath}");
+                // --- FIN NOUVELLES LIGNES DE DÉBOGAGE ---
+
                 int processResult;
                 IntPtr pDestPath = IntPtr.Zero;
                 IntPtr pDestName = IntPtr.Zero;
@@ -438,7 +447,7 @@ public class Program
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
+                    Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"An unexpected error occurred during decompression: {ex.Message}");
             Console.ResetColor();
             return E_UNKNOWN;
