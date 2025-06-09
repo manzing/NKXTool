@@ -10,34 +10,44 @@ public class Program
     // --- P/Invoke Definitions for WCX Plugin Functions ---
     private const string PluginDllName = "inNKX.wcx";
 
-    // Constants for PackFilesW (Flags parameter) - Based on WCX SDK
+    // Constants for PackFilesW (Flags parameter) - Based on WCX SDK (from wcxplugin.pas)
     public const int PK_DEFAULT = 0x0000;
-    public const int PK_PACK_MOVE_FILES = 0x0001;
-    public const int PK_PACK_SAVE_PATHS = 0x0002;
-    public const int PK_PACK_ATTRIBUTES = 0x0004;
+    public const int PK_PACK_MOVE_FILES = 1;     // From wcxplugin.pas: PK_PACK_MOVE_FILES= 1
+    public const int PK_PACK_SAVE_PATHS = 2;     // From wcxplugin.pas: PK_PACK_SAVE_PATHS= 2
+    public const int PK_PACK_ENCRYPT = 4;        // From wcxplugin.pas: PK_PACK_ENCRYPT= 4
 
-    // Constants for UnpackFilesW / ProcessFileW (Mode parameter) - Based on WCX SDK
-    public const int PK_EXTRACT = 0x0000;       // For ProcessFileW: Extract file (value 0 according to SDK)
-    public const int PK_TEST = 0x0001;          // For ProcessFileW: Test file
-    public const int PK_SKIP = 0x0002;          // For ProcessFileW: Skip file (cmdTotal.asm uses this for directories)
-    public const int PK_OVERWRITE = 0x0008;     // Overwrite existing file (for ProcessFileW)
+    // Constants for UnpackFilesW / ProcessFileW (Mode parameter) - Based on wcxplugin.pas
+    public const int PK_SKIP = 0;           // From wcxplugin.pas: PK_SKIP= 0
+    public const int PK_TEST = 1;           // From wcxplugin.pas: PK_TEST= 1
+    public const int PK_EXTRACT = 2;        // From wcxplugin.pas: PK_EXTRACT= 2 (CRITICAL CHANGE!)
 
-    // WCX SDK Return Codes
-    public const int PK_OK = 0;              // Success
-    public const int E_END_ARCHIVE = 10;     // End of archive (for ReadHeader)
-    public const int E_NO_MEMORY = 1;        // Out of memory
-    public const int E_BAD_ARCHIVE = 2;      // Bad archive file
-    public const int E_UNKNOWN_FORMAT = 3;   // Unknown archive format
-    public const int E_BAD_DATA = 4;         // CRC error in data
-    public const int E_NO_FILES = 6;         // No files matching pattern
-    public const int E_TOO_MANY_FILES = 7;   // Too many files to add
-    public const int E_NOT_SUPPORTED = 8;    // Function not supported by plugin
-    public const int E_WRITE_ERROR = 9;      // Disk write error
-    public const int E_ABORT = 11;           // User abort
+    // Unpacking flags for OpenArchiveW - Based on wcxplugin.pas
+    public const int PK_OM_LIST = 0;
+    public const int PK_OM_EXTRACT = 1;     // From wcxplugin.pas: PK_OM_EXTRACT= 1
 
-    // Structure for ReadHeaderExW based on cmdTotal.asm's HEADERDATAEXW definition
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct tHeaderDataExW_cmdTotal_Style
+    // WCX SDK Return Codes - BASED ON wcxplugin.pas (CRITICAL CHANGES!)
+    public const int E_SUCCESS = 0;          // Success
+    public const int E_END_ARCHIVE = 10;     // No more files in archive
+    public const int E_NO_MEMORY = 11;       // Not enough memory
+    public const int E_BAD_DATA = 12;        // Data is bad
+    public const int E_BAD_ARCHIVE = 13;     // CRC error in archive data
+    public const int E_UNKNOWN_FORMAT = 14;  // Archive format unknown
+    public const int E_EOPEN = 15;           // Cannot open existing file
+    public const int E_ECREATE = 16;         // Cannot create file
+    public const int E_ECLOSE = 17;          // Error closing file
+    public const int E_EREAD = 18;           // Error reading from file
+    public const int E_EWRITE = 19;          // Error writing to file (formerly E_WRITE_ERROR)
+    public const int E_SMALL_BUF = 20;       // Buffer too small
+    public const int E_EABORTED = 21;        // Function aborted by user (formerly E_ABORT)
+    public const int E_NO_FILES = 22;        // No files found
+    public const int E_TOO_MANY_FILES = 23;  // Too many files to pack
+    public const int E_NOT_SUPPORTED = 24;   // Function not supported
+
+
+    // Structure for ReadHeaderExW based on wcxplugin.pas THeaderDataExW
+    // CRITICAL: LayoutKind.Sequential, Pack = 1 to match Pascal's 'packed record'
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+    public struct tHeaderDataExW_WCXPlugin
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)]
         public string hdArcNameW;
@@ -45,38 +55,44 @@ public class Program
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)]
         public string hdFileNameW;
 
-        public UInt32 hdFlags;
-        public UInt32 hdPackSizeLow;
+        public Int32 hdFlags; // longint is Int32
+        public UInt32 hdPackSize;
         public UInt32 hdPackSizeHigh;
-        public UInt32 hdUnpSizeLow;
+        public UInt32 hdUnpSize;
         public UInt32 hdUnpSizeHigh;
-        public UInt32 hdHostOS;
-        public UInt32 hdFileCRC;
-        public UInt32 hdFileTime;
-        public UInt32 hdUnpVer;
-        public UInt32 hdMethod; // Corrected: Removed the extraneous '3'
-        public UInt32 hdFileAttr;
-        public IntPtr hdCmtBuf;
-        public UInt32 hdCmtBufSize;
-        public UInt32 hdCmtSize;
-        public UInt32 hdCmtState;
+        public Int32 hdHostOS;
+        public Int32 hdFileCRC;
+        public Int32 hdFileTime;
+        public Int32 hdUnpVer;
+        public Int32 hdMethod;
+        public Int32 hdFileAttr;
 
+        public IntPtr hdCmtBuf; // pchar (pointer to char, ANSI string)
+        public Int32 hdCmtBufSize;
+        public Int32 hdCmtSize;
+        public Int32 hdCmtState;
+
+        // Reserved:array[0..1023] of char; - This is 1024 bytes
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)]
         public byte[] hdReserved;
+
+        public UInt64 MfileTime; // CRITICAL: Missing field from previous version, added from wcxplugin.pas
     }
 
 
-    // Structure for OpenArchiveW based on cmdTotal.asm's OPENARCHIVEDATAAW
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct tOpenArchiveDataExW
+    // Structure for OpenArchiveW based on wcxplugin.pas tOpenArchiveDataW
+    // CRITICAL: LayoutKind.Sequential, Pack = 1 to match Pascal's 'packed record'
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+    public struct tOpenArchiveDataW_WCXPlugin
     {
-        public IntPtr ArcName;
-        public int OpenMode;
-        public int OpenResult;
-        public IntPtr CmtBuf;
-        public int CmtBufSize;
-        public int CmtSize;
-        public int CmtState;
+        public IntPtr ArcName; // pwidechar (pointer to widechar, Unicode string)
+        public Int32 OpenMode;
+        public Int32 OpenResult;
+
+        public IntPtr CmtBuf; // pwidechar (pointer to widechar, Unicode string)
+        public Int32 CmtBufSize;
+        public Int32 CmtSize;
+        public Int32 CmtState;
     }
 
 
@@ -90,12 +106,12 @@ public class Program
         [MarshalAs(UnmanagedType.LPWStr)] string FileList);
 
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataExW OpenArchiveData);
+    private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataW_WCXPlugin OpenArchiveData);
 
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_cmdTotal_Style HeaderData);
+    private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_WCXPlugin HeaderData);
 
-    // MODIFIED: ProcessFileW now takes IntPtr for string parameters
+    // MODIFIED: ProcessFileW takes IntPtr for string parameters for explicit memory management
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern int ProcessFileW(IntPtr hArc, int Operation,
         IntPtr DestPath, // Changed from string?
@@ -262,7 +278,7 @@ public class Program
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Plugin reported success (0) but NKX file not found at '{outputNkxFileName}'.");
                     Console.ResetColor();
-                    return E_WRITE_ERROR; // Indicate failure
+                    return E_EWRITE; // Use new error code
                 }
             }
             else
@@ -287,7 +303,7 @@ public class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"Error: Source file not found or is not a .nkx archive: '{sourceNkxPath}'");
             Console.ResetColor();
-            return E_BAD_ARCHIVE;
+            return E_BAD_ARCHIVE; // Use new error code
         }
 
         Directory.CreateDirectory(destinationDirPath); // Ensure destination exists
@@ -297,11 +313,11 @@ public class Program
         Console.ResetColor();
 
         IntPtr hArc = IntPtr.Zero; // Handle to the archive
-        int result = PK_OK;
+        int result = E_SUCCESS; // Use new success code
 
-        // Prepare tOpenArchiveDataExW struct for OpenArchiveW call
-        tOpenArchiveDataExW openArcData = new tOpenArchiveDataExW();
-        openArcData.OpenMode = 1; // PK_OM_EXTRACT based on cmdTotal.asm
+        // Prepare tOpenArchiveDataW_WCXPlugin struct for OpenArchiveW call
+        tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin();
+        openArcData.OpenMode = PK_OM_EXTRACT; // Use constant from wcxplugin.pas
 
         // Marshal the archive name string to an unmanaged pointer for ArcName field
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
@@ -321,10 +337,10 @@ public class Program
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.Error.WriteLine($"Error: Could not open archive '{sourceNkxPath}'. Plugin returned invalid handle. OpenResult: {openArcData.OpenResult}");
                 Console.ResetColor();
-                return E_BAD_ARCHIVE;
+                return E_BAD_ARCHIVE; // Use new error code
             }
 
-            tHeaderDataExW_cmdTotal_Style headerData = new tHeaderDataExW_cmdTotal_Style();
+            tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
             int fileCount = 0;
 
             // Loop through files in the archive
@@ -332,12 +348,12 @@ public class Program
             {
                 result = ReadHeaderExW(hArc, ref headerData);
 
-                if (result == E_END_ARCHIVE)
+                if (result == E_END_ARCHIVE) // Use new error code
                 {
                     Console.WriteLine("End of archive.");
                     break;
                 }
-                else if (result != PK_OK)
+                else if (result != E_SUCCESS) // Use new success code
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to read header. Return Code: {result} (Check WCX SDK for meaning).");
@@ -373,7 +389,8 @@ public class Program
                     {
                         // Allocate memory for the destination path string explicitly
                         pDestName = Marshal.StringToHGlobalUni(fullDestinationFilePath);
-                        processResult = ProcessFileW(hArc, PK_EXTRACT | PK_OVERWRITE, IntPtr.Zero, pDestName);
+                        // CRITICAL CHANGE: Use PK_EXTRACT=2, remove PK_OVERWRITE
+                        processResult = ProcessFileW(hArc, PK_EXTRACT, IntPtr.Zero, pDestName);
                     }
                 }
                 finally
@@ -386,7 +403,7 @@ public class Program
                 }
 
 
-                if (processResult != PK_OK)
+                if (processResult != E_SUCCESS) // Use new success code
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.Error.WriteLine($"Error: Failed to process file '{relativeFilePath}'. Return Code: {processResult}.");
@@ -399,14 +416,14 @@ public class Program
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Decompression successful. Extracted {fileCount} files from '{sourceNkxPath}'.");
             Console.ResetColor();
-            return PK_OK;
+            return E_SUCCESS; // Use new success code
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"An unexpected error occurred during decompression: {ex.Message}");
             Console.ResetColor();
-            return E_ABORT;
+            return E_UNKNOWN; // Use new error code
         }
         finally
         {
