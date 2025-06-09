@@ -75,12 +75,16 @@ public class Program
 
     // Original PackFilesW for compression
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern int PackFilesW(string PackedFile, string SubPath, int Flags, string FileList);
+    private static extern int PackFilesW(
+        [MarshalAs(UnmanagedType.LPWStr)] string PackedFile,
+        [MarshalAs(UnmanagedType.LPWStr)] string SubPath,
+        int Flags,
+        [MarshalAs(UnmanagedType.LPWStr)] string FileList);
 
     // New functions for decompression (Open/Read/Process/Close)
     // HANDLE __stdcall OpenArchiveW(char* ArchiveName, int OpenMode)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern IntPtr OpenArchiveW(string ArchiveName, int OpenMode); // Returns a handle (IntPtr)
+    private static extern IntPtr OpenArchiveW([MarshalAs(UnmanagedType.LPWStr)] string ArchiveName, int OpenMode); // Returns a handle (IntPtr)
 
     // int __stdcall ReadHeaderExW(HANDLE hArc, tHeaderDataExW *HeaderData)
     // Note: When passing a struct by reference to a C function, use 'ref' in C#
@@ -89,7 +93,9 @@ public class Program
 
     // int __stdcall ProcessFileW(HANDLE hArc, int Operation, char* DestPath, char* DestName)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern int ProcessFileW(IntPtr hArc, int Operation, string DestPath, string DestName);
+    private static extern int ProcessFileW(IntPtr hArc, int Operation,
+        [MarshalAs(UnmanagedType.LPWStr)] string DestPath,
+        [MarshalAs(UnmanagedType.LPWStr)] string DestName);
 
     // int __stdcall CloseArchive(HANDLE hArc)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall)] // CharSet is not relevant for handle only
@@ -116,7 +122,7 @@ public class Program
     public static int Main(string[] args)
     {
         Console.WriteLine("--------------------------------------------------");
-        Console.WriteLine("NKX Direct Utility by Manzing (C# Edition)");
+        Console.WriteLine("NKX Tool - NKX pack / unpack tool");
         Console.WriteLine("--------------------------------------------------");
 
         if (args.Length < 3)
@@ -375,12 +381,12 @@ public class Program
     {
         Console.WriteLine("Usage: NkxTool <operation> <sourcePath> <destinationPath>");
         Console.WriteLine("Operations:");
-        Console.WriteLine("  compress   - Compresses a folder into an NKX archive.");
-        Console.WriteLine("             - <sourcePath>: Path to the folder to compress.");
-        Console.WriteLine("             - <destinationPath>: Directory where the NKX will be created.");
+        Console.WriteLine("  compress    - Compresses a folder into an NKX archive.");
+        Console.WriteLine("              - <sourcePath>: Path to the folder to compress.");
+        Console.WriteLine("              - <destinationPath>: Directory where the NKX will be created.");
         Console.WriteLine("  decompress - Decompresses an NKX archive.");
-        Console.WriteLine("             - <sourcePath>: Path to the .nkx file.");
-        Console.WriteLine("             - <destinationPath>: Directory where contents will be extracted.");
+        Console.WriteLine("              - <sourcePath>: Path to the .nkx file.");
+        Console.WriteLine("              - <destinationPath>: Directory where contents will be extracted.");
         Console.WriteLine("\nExamples:");
         Console.WriteLine("  NkxTool compress \"C:\\MySamples\\Pianos\" \"C:\\MyNkxArchives\"");
         Console.WriteLine("  NkxTool decompress \"C:\\MyNkxArchives\\Pianos.nkx\" \"C:\\ExtractedSamples\"");
