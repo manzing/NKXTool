@@ -54,7 +54,7 @@ public class Program
         public UInt32 hdFileCRC;
         public UInt32 hdFileTime;
         public UInt32 hdUnpVer;
-3        public UInt32 hdMethod;
+        public UInt32 hdMethod; // Corrected: Removed the extraneous '3'
         public UInt32 hdFileAttr;
         public IntPtr hdCmtBuf;
         public UInt32 hdCmtBufSize;
