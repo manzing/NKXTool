@@ -377,7 +377,7 @@ public class Program
                 // Implement cmdTotal.asm's logic for ProcessFileW parameters
                 // For directories, cmdTotal passes DestPath=NULL, DestName=NULL and PK_SKIP.
                 // For files, cmdTotal passes DestPath=NULL, DestName=fullFilePath and PK_EXTRACT.
-                if ((headerData.FileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
+                if ((headerData.hdFileAttr & 0x10) != 0) // Check if it's a directory (FILE_ATTRIBUTE_DIRECTORY)
                 {
                     processResult = ProcessFileW(hArc, PK_SKIP, null, null);
                 }
