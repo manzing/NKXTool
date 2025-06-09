@@ -1,7 +1,7 @@
 # NkxTool - A Direct NKX Compression/Decompression Utility
 
 This is a command-line utility for compressing folders into Kontakt NKX archives and decompressing NKX archives,
-by directly interacting with the `inNKX.wcx` plugin. It serves as a replacement for `cmdTotal.exe` for these specific operations.
+by directly interacting with the `inNKX.wcx` plugin. 
 
 ## Features
 
@@ -37,7 +37,7 @@ by directly interacting with the `inNKX.wcx` plugin. It serves as a replacement 
     -   `/p:PublishSingleFile=true`: Create a single executable file.
 
 4.  **Find the executable:**
-    The compiled executable (`NkxTool.exe`) and the `inNKX.wcx` plugin (copied automatically by the build process) will be located in the `bin\Release\netX.0\win-x64\publish\` directory (where `X.0` is your .NET target framework version, e.g., `net8.0`).
+    The compiled executable (`NkxTool.exe`) and the `inNKX.wcx` plugin (copied automatically by the build process) will be located in the `bin\Release\netX.0\win-x64\publish\` directory (where `X.0` is your .NET target framework version, e.g., `net6.0`).
 
 ## Usage
 
