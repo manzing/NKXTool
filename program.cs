@@ -228,7 +228,7 @@ public class Program
         try
         {
             Environment.CurrentDirectory = sourceFolderPath;
-            int result = PackFilesW(outputNkxFileName, "", packFlags, fileListString);
+            int result = PackFilesW(outputNkxFileName, null, packFlags, fileListString);
 
             if (result == PK_OK)
             {
