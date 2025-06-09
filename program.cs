@@ -29,7 +29,7 @@ public class Program
     // WCX SDK Return Codes - BASED ON wcxplugin.pas
     public const int E_SUCCESS = 0;          // Success (formerly PK_OK)
     public const int E_END_ARCHIVE = 10;     // No more files in archive
-    public const int int E_NO_MEMORY = 11;       // Not enough memory
+    public const int E_NO_MEMORY = 11;       // Not enough memory
     public const int E_BAD_DATA = 12;        // Data is bad
     public const int E_BAD_ARCHIVE = 13;     // CRC error in archive data
     public const int E_UNKNOWN_FORMAT = 14;  // Archive format unknown
