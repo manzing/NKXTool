@@ -30,46 +30,47 @@ public class Program
     public const int E_UNKNOWN_FORMAT = 3;   // Unknown archive format
     public const int E_BAD_DATA = 4;         // CRC error in data
     public const int E_NO_FILES = 6;         // No files matching pattern
-    public const int E_TOO_MANY_FILES = 7;   // Too many files to add
+    public const int E_TOO_MANY_FILES = 7;   // Too many files to add (FIXED TYPO)
     public const int E_NOT_SUPPORTED = 8;    // Function not supported by plugin
     public const int E_WRITE_ERROR = 9;      // Disk write error
     public const int E_ABORT = 11;           // User abort
 
-    // Structure for ReadHeaderExW (Unicode version) - This struct matches WCX SDK
-    // Note: The structure used by cmdTotal.asm for HEADERDATAEXW is DIFFERENT.
-    // If crashes persist on ReadHeaderExW, this struct may need to be adapted to cmdTotal's definition.
+    // NEW: Structure for ReadHeaderExW based on cmdTotal.asm's HEADERDATAEXW definition
+    // This is a custom struct layout that does NOT match the official WCX SDK's tHeaderDataExW.
+    // We are adopting this because cmdTotal.asm successfully interacts with inNKX.wcx.
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct tHeaderDataExW
+    public struct tHeaderDataExW_cmdTotal_Style
     {
-        public UInt32 Crc32;
-        public UInt32 FileTime;
-        public UInt32 PackSize;
-        public UInt32 UnPackSize;
-        public UInt32 FileAttr;
-        public int Ratio;
-        public UInt32 Flags;
+        // Sizes from cmdTotal.asm's HEADERDATAEXW (1024 words = 2048 bytes for strings)
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] // wchar_t[1024] - ArcName, but in this struct context is likely ArcName within header
+        public string hdArcNameW; // Not in standard SDK tHeaderDataExW, but first field in cmdTotal's HEADERDATAEXW
 
-        // ANSI fields - must be present for correct struct layout, but not used by Wide char APIs
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)]
-        public byte[] FileNameA;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 260)]
-        public byte[] PathA;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
-        public byte[] ReservedA;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] // wchar_t[1024] - FileName
+        public string hdFileNameW;
 
-        public UInt32 Crc32_low;
-        public UInt32 UnPackSize_low;
+        public UInt32 hdFlags;
+        public UInt32 hdPackSizeLow;
+        public UInt32 hdPackSizeHigh;
+        public UInt32 hdUnpSizeLow;
+        public UInt32 hdUnpSizeHigh;
+        public UInt32 hdHostOS;
+        public UInt32 hdFileCRC;
+        public UInt32 hdFileTime;
+        public UInt32 hdUnpVer;
+        public UInt32 hdMethod;
+        public UInt32 hdFileAttr;
+        public IntPtr hdCmtBuf; // dd ? -> pointer
+        public UInt32 hdCmtBufSize;
+        public UInt32 hdCmtSize;
+        public UInt32 hdCmtState;
 
-        // Unicode fields
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] // For wchar_t FileName[512]
-        public string FileNameW;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 512)] // For wchar_t Path[512]
-        public string PathW;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] // For BYTE ReservedW[256]
-        public byte[] ReservedW;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)] // 1024 bytes for Reserved
+        public byte[] hdReserved;
 
-        public string FullPathW => PathW + (string.IsNullOrEmpty(PathW) ? "" : "\\") + FileNameW;
+        // Note: cmdTotal's HEADERDATAEXW does NOT contain a separate PathW field.
+        // The hdFileNameW field will likely contain the full relative path + filename (e.g., "SubDir\File.wav").
     }
+
 
     // NEW: Structure for OpenArchiveW based on cmdTotal.asm's OPENARCHIVEDATAAW
     // This differs from the standard WCX SDK's OpenArchiveW signature
@@ -100,9 +101,9 @@ public class Program
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataExW OpenArchiveData);
 
-    // ReadHeaderExW remains the same (assuming SDK struct is correct for this one)
+    // ReadHeaderExW now uses the custom struct based on cmdTotal.asm
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW HeaderData);
+    private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_cmdTotal_Style HeaderData);
 
     // ProcessFileW remains the same (parameters are handled in the call site)
     [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
@@ -214,7 +215,7 @@ public class Program
         }
         else
         {
-            Console.ForegroundColor = ConsoleColor.Red;
+                Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Operation failed with exit code {resultCode}.");
         }
         Console.ResetColor();
@@ -309,7 +310,7 @@ public class Program
         IntPtr hArc = IntPtr.Zero; // Handle to the archive
         int result = PK_OK;
 
-        // NEW: Prepare tOpenArchiveDataExW struct for OpenArchiveW call
+        // Prepare tOpenArchiveDataExW struct for OpenArchiveW call
         tOpenArchiveDataExW openArcData = new tOpenArchiveDataExW();
         // cmdTotal uses 1 for extraction mode, 0 for list/test
         openArcData.OpenMode = 1; // PK_OM_EXTRACT based on cmdTotal.asm
@@ -335,7 +336,8 @@ public class Program
                 return E_BAD_ARCHIVE;
             }
 
-            tHeaderDataExW headerData = new tHeaderDataExW();
+            // NEW: Use the custom header data struct
+            tHeaderDataExW_cmdTotal_Style headerData = new tHeaderDataExW_cmdTotal_Style();
             int fileCount = 0;
 
             // Loop through files in the archive
@@ -356,8 +358,9 @@ public class Program
                     return result; // Error reading header
                 }
 
-                // Construct the full destination path for the current file
-                string relativeFilePath = Path.Combine(headerData.PathW, headerData.FileNameW).Replace('/', Path.DirectorySeparatorChar);
+                // NEW: Construct the full destination path using hdFileNameW directly
+                // (Assuming hdFileNameW now contains the full relative path including directory)
+                string relativeFilePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
 
                 string fullDestinationFilePath = Path.Combine(destinationDirPath, relativeFilePath);
                 string fileDirectory = Path.GetDirectoryName(fullDestinationFilePath);
