@@ -1,0 +1,22 @@
+# Visual Studio
+.vs/
+*.sln.ide/
+
+# Binaries and intermediate files
+[Bb]in/
+[Oo]bj/
+
+# Rider
+.idea/
+
+# .NET tool files
+.config/dotnet-tools.json
+.config/dotnet-tools.local.json
+
+# misc
+*.user
+*.suo
+*.pidb
+*.log
+*.lock
+*.psd1
