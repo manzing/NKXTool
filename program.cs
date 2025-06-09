@@ -29,7 +29,7 @@ public class Program
     // WCX SDK Return Codes - BASED ON wcxplugin.pas
     public const int E_SUCCESS = 0;          // Success (formerly PK_OK)
     public const int E_END_ARCHIVE = 10;     // No more files in archive
-    public const int E_NO_MEMORY = 11;       // Not enough memory
+    public const int int E_NO_MEMORY = 11;       // Not enough memory
     public const int E_BAD_DATA = 12;        // Data is bad
     public const int E_BAD_ARCHIVE = 13;     // CRC error in archive data
     public const int E_UNKNOWN_FORMAT = 14;  // Archive format unknown
@@ -393,8 +393,9 @@ public class Program
                 Console.WriteLine($"  Debugging: hdFileNameW = '{headerData.hdFileNameW}'");
                 Console.WriteLine($"  Debugging: relativeFilePath = '{relativeFilePath}'");
                 Console.WriteLine($"  Debugging: fullDestinationFilePath = '{fullDestinationFilePath}'");
+                // Ligne corrigée ci-dessous
                 Console.WriteLine($"  Debugging: hdFileAttr = {headerData.hdFileAttr}");
-                Console.WriteLine($"  Debugging: Operation for ProcessFileW = {(headerData.hdFileAttr & 0x10) != 0 ? "PK_SKIP" : "PK_EXTRACT | PK_OVERWRITE"}");
+                Console.WriteLine($"  Debugging: Operation for ProcessFileW = {((headerData.hdFileAttr & 0x10) != 0 ? "PK_SKIP" : "PK_EXTRACT | PK_OVERWRITE")}");
                 Console.WriteLine($"  Debugging: About to call ProcessFileW for file: {fullDestinationFilePath}");
                 // --- FIN NOUVELLES LIGNES DE DÉBOGAGE ---
 
