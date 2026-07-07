@@ -165,8 +165,27 @@ public class Program
 
         if (filesToPack.Count == 0) return 1;
 
-        string listStr = string.Join("\0", filesToPack) + "\0\0";
-        IntPtr pAddList = Marshal.StringToHGlobalUni(listStr);
+        // 1. Construire la liste exactement comme le demande le SDK WCX (Unicode = 2 octets par caractère)
+        List<byte> listBytes = new List<byte>();
+        
+        foreach (string file in filesToPack)
+        {
+            listBytes.AddRange(Encoding.Unicode.GetBytes(file));
+            listBytes.Add(0); // Premier octet du \0
+            listBytes.Add(0); // Deuxième octet du \0 (car on est en UTF-16)
+        }
+        
+        // Double Null de fin de liste
+        listBytes.Add(0);
+        listBytes.Add(0);
+        
+        byte[] finalBytes = listBytes.ToArray();
+
+        // 2. Allouer la mémoire non managée exactement à la bonne taille
+        IntPtr pAddList = Marshal.AllocHGlobal(finalBytes.Length);
+        
+        // 3. Copier les octets
+        Marshal.Copy(finalBytes, 0, pAddList, finalBytes.Length);
 
         try
         {
