@@ -134,7 +134,6 @@ public class Program
         if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) 
             srcPath += Path.DirectorySeparatorChar;
 
-        // On liste explicitement tous les fichiers à l'intérieur du dossier
         List<string> filesToPack = new List<string>();
         foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
         {
@@ -147,17 +146,21 @@ public class Program
             return 1;
         }
 
-        // On crée la liste séparée par des caractères nuls et terminée par un double nul
+        // Créer la liste avec des null-terminators ANSI (au cas où le plugin soit capricieux)
+        // Mais comme on appelle PackFilesW (W pour Wide/Unicode), on va utiliser UTF-16 (Unicode).
         string listStr = string.Join("\0", filesToPack) + "\0\0";
-        byte[] listBytes = Encoding.Unicode.GetBytes(listStr);
-        IntPtr pAddList = Marshal.AllocHGlobal(listBytes.Length);
-        Marshal.Copy(listBytes, 0, pAddList, listBytes.Length);
+        
+        // C'est souvent ici que ça plante: Marshal.StringToHGlobalUni alloue proprement 
+        // une chaîne Wide String terminée par deux nuls en mémoire non managée, 
+        // ce qui est bien plus sûr que notre manipulation manuelle de byte[]
+        IntPtr pAddList = Marshal.StringToHGlobalUni(listStr);
 
         try
         {
             Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
             
-            int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
+            // Correction clé : Passer "" au lieu de null pour SubPath
+            int result = PackFilesW(outputNkxFilePath, "", srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
             {
@@ -175,6 +178,7 @@ public class Program
         }
         finally
         {
+            // Toujours libérer la mémoire !
             Marshal.FreeHGlobal(pAddList);
         }
     }
