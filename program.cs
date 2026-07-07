@@ -126,29 +126,31 @@ public class Program
         if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
             outputNkxFilePath = Path.Combine(outputNkxFilePath, new DirectoryInfo(sourceFolderPath).Name + ".nkx");
 
-        Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath));
+        string? outDir = Path.GetDirectoryName(outputNkxFilePath);
+        if (!string.IsNullOrEmpty(outDir))
+            Directory.CreateDirectory(outDir);
 
-        List<string> filesToPack = new List<string>();
-        foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
-        {
-            filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
-        }
+        // Préparation du dossier source avec l'antislash final impératif
+        string srcPath = Path.GetFullPath(sourceFolderPath);
+        if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) 
+            srcPath += Path.DirectorySeparatorChar;
 
-        string listStr = string.Join("\0", filesToPack) + "\0\0";
+        string listStr = "*.*" + "\0\0";
         byte[] listBytes = Encoding.Unicode.GetBytes(listStr);
         IntPtr pAddList = Marshal.AllocHGlobal(listBytes.Length);
         Marshal.Copy(listBytes, 0, pAddList, listBytes.Length);
 
         try
         {
-            string srcPath = sourceFolderPath;
-            if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) srcPath += Path.DirectorySeparatorChar;
+            Console.WriteLine($"Compressing contents of '{srcPath}' into '{outputNkxFilePath}'...");
+            
+            // On enregistre les Callbacks au cas où le plugin veuille afficher une barre de progression pendant la compression
+            try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
 
-            Console.WriteLine($"Compressing {filesToPack.Count} files...");
             int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
-                Console.WriteLine($"Success: {outputNkxFilePath}");
+                Console.WriteLine($"Compression successful: {outputNkxFilePath}");
             else
                 Console.WriteLine($"Plugin failed with code: {result}");
             
@@ -209,10 +211,10 @@ public class Program
                     if (processResult != E_SUCCESS)
                         Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
 
-                    // ON MET EN PAUSE ICI
-                    Console.WriteLine("PAUSE : Regarde s'il y a une fenêtre pop-up et lis l'erreur.");
-                    Console.WriteLine("Appuie sur ENTRÉE dans cette console pour continuer...");
-                    Console.ReadLine();
+                    // DEBUG PAUSE
+                    // Console.WriteLine("PAUSE : Regarde s'il y a une fenêtre pop-up et lis l'erreur.");
+                    // Console.WriteLine("Appuie sur ENTRÉE dans cette console pour continuer...");
+                    // Console.ReadLine();
                 }
             }
             Console.WriteLine("Decompression successful.");
