@@ -15,6 +15,7 @@ public class Program
     public const int E_SUCCESS = 0;
     public const int E_END_ARCHIVE = 10;
     
+    // --- STRUCTURES ---
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW_WCXPlugin
     {
@@ -50,32 +51,36 @@ public class Program
         public int CmtState;
     }
 
-    // --- DELEGATES POUR LES CALLBACKS DE PROGRESSION ---
+    // NOUVELLE STRUCTURE D'INITIALISATION
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct PackDefaultParamStruct
+    {
+        public int size;
+        public uint PluginInterfaceVersionLow;
+        public uint PluginInterfaceVersionHi;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string DefaultIniName;
+    }
+
+    // --- DELEGATES ---
     [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     public delegate int ProcessDataProcWDelegate(string FileName, int Size);
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
     public delegate int ChangeVolProcWDelegate(string ArcName, int Mode);
 
-    // On doit garder une référence statique pour éviter que le Garbage Collector ne les supprime
     private static ProcessDataProcWDelegate _processDataProc = new ProcessDataProcWDelegate(OnProcessData);
     private static ChangeVolProcWDelegate _changeVolProc = new ChangeVolProcWDelegate(OnChangeVol);
 
-    private static int OnProcessData(string FileName, int Size) { return 1; } // 1 = Continuer
-    private static int OnChangeVol(string ArcName, int Mode) { return 1; } // 1 = Continuer
+    private static int OnProcessData(string FileName, int Size) { return 1; }
+    private static int OnChangeVol(string ArcName, int Mode) { return 1; }
 
-    // --- IMPORTS DES FONCTIONS ---
-    [DllImport(PluginDllName)]
-    private static extern int GetPackCaps();
+    // --- IMPORTS ---
+    [DllImport(PluginDllName, CharSet = CharSet.Ansi)]
+    private static extern void PackSetDefaultParams(ref PackDefaultParamStruct dps);
 
-    // On modifie l'import de PackFilesW pour sécuriser les chaînes et forcer IntPtr pour SubPath
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
-    private static extern int PackFilesW(
-        [MarshalAs(UnmanagedType.LPWStr)] string PackedFile, 
-        IntPtr SubPath, 
-        [MarshalAs(UnmanagedType.LPWStr)] string SrcPath, 
-        IntPtr AddList, 
-        int Flags);
+    private static extern int PackFilesW(string PackedFile, string SubPath, string SrcPath, IntPtr AddList, int Flags);
 
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataW_WCXPlugin OpenArchiveData);
@@ -89,15 +94,12 @@ public class Program
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern void SetProcessDataProcW(IntPtr hArc, ProcessDataProcWDelegate pProcessDataProc);
 
-    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
-    private static extern void SetChangeVolProcW(IntPtr hArc, ChangeVolProcWDelegate pChangeVolProc);
-
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
     public static int Main(string[] args)
     {
-        // Forcer le répertoire de travail pour que inNKX.wcx trouve et crée ses fichiers .userdb / .ini
+        // Fixer le répertoire de travail
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
@@ -112,6 +114,19 @@ public class Program
         string destinationPath = Path.GetFullPath(args[2]);
 
         Console.WriteLine($"[NkxTool x64] Operation: {operation}");
+
+        // --- INITIALISATION DU PLUGIN (Simulation de Double Commander) ---
+        try
+        {
+            PackDefaultParamStruct dps = new PackDefaultParamStruct();
+            dps.size = Marshal.SizeOf(typeof(PackDefaultParamStruct));
+            dps.PluginInterfaceVersionLow = 1;
+            dps.PluginInterfaceVersionHi = 2;
+            dps.DefaultIniName = Path.Combine(exeDirectory, "inNKX.ini");
+
+            PackSetDefaultParams(ref dps);
+        }
+        catch { /* Certains plugins n'ont pas cette fonction, on l'ignore si c'est le cas */ }
 
         try
         {
@@ -132,22 +147,6 @@ public class Program
 
     private static int CompressFolder(string sourceFolderPath, string outputNkxFilePath)
     {
-        // --- VERIFICATION DES CAPACITES DU PLUGIN ---
-        try
-        {
-            int caps = GetPackCaps();
-            Console.WriteLine($"[Debug] Plugin capabilities code: {caps}");
-            
-            // 1 = PK_CAPS_NEW (Peut créer de nouvelles archives)
-            if ((caps & 1) == 0)
-            {
-                Console.WriteLine("ATTENTION : Le plugin inNKX a répondu qu'il NE SUPPORTE PAS la création d'archives.");
-                Console.WriteLine("La fonction PackFilesW risque de planter car elle n'est pas codée dans la DLL.");
-            }
-        }
-        catch { /* Ignoré si GetPackCaps n'existe pas */ }
-        // ---------------------------------------------
-
         if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
             outputNkxFilePath = Path.Combine(outputNkxFilePath, new DirectoryInfo(sourceFolderPath).Name + ".nkx");
 
@@ -165,39 +164,37 @@ public class Program
 
         if (filesToPack.Count == 0) return 1;
 
-        // 1. Construire la liste exactement comme le demande le SDK WCX (Unicode = 2 octets par caractère)
+        // Allocation hyper-sécurisée de la liste AddList (Unicode, double null)
         List<byte> listBytes = new List<byte>();
-        
         foreach (string file in filesToPack)
         {
             listBytes.AddRange(Encoding.Unicode.GetBytes(file));
-            listBytes.Add(0); // Premier octet du \0
-            listBytes.Add(0); // Deuxième octet du \0 (car on est en UTF-16)
+            listBytes.Add(0); listBytes.Add(0);
         }
-        
-        // Double Null de fin de liste
-        listBytes.Add(0);
-        listBytes.Add(0);
-        
-        byte[] finalBytes = listBytes.ToArray();
+        listBytes.Add(0); listBytes.Add(0); // Terminaison finale
 
-        // 2. Allouer la mémoire non managée exactement à la bonne taille
+        byte[] finalBytes = listBytes.ToArray();
         IntPtr pAddList = Marshal.AllocHGlobal(finalBytes.Length);
-        
-        // 3. Copier les octets
         Marshal.Copy(finalBytes, 0, pAddList, finalBytes.Length);
 
         try
         {
             Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
             
-            // On passe IntPtr.Zero pour SubPath (Très important pour éviter les pointeurs corrompus)
-            int result = PackFilesW(outputNkxFilePath, IntPtr.Zero, srcPath, pAddList, PK_PACK_SAVE_PATHS);
+            // On passe "" pour SubPath afin de ne jamais envoyer de pointeur Null
+            int result = PackFilesW(outputNkxFilePath, "", srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
-                Console.WriteLine($"Compression successful: {outputNkxFilePath}");
+            {
+                if (File.Exists(outputNkxFilePath))
+                    Console.WriteLine($"Compression successful: {outputNkxFilePath}");
+                else
+                    Console.WriteLine("Plugin reported success, but the archive file was not created.");
+            }
             else
+            {
                 Console.WriteLine($"Plugin failed with code: {result}");
+            }
             
             return result;
         }
@@ -211,7 +208,6 @@ public class Program
     {
         Directory.CreateDirectory(destinationDirPath);
         
-        // Sécurité : Forcer le backslash à la fin du chemin cible
         string destPathW = destinationDirPath;
         if (!destPathW.EndsWith(Path.DirectorySeparatorChar.ToString()))
             destPathW += Path.DirectorySeparatorChar;
@@ -223,17 +219,12 @@ public class Program
         IntPtr hArc = OpenArchiveW(ref openArcData);
         Marshal.FreeHGlobal(pArcName);
 
-        if (hArc == IntPtr.Zero)
-        {
-            Console.WriteLine($"Failed to open archive. OpenResult: {openArcData.OpenResult}");
-            return 1;
-        }
+        if (hArc == IntPtr.Zero) return 1;
 
         try
         {
-            // --- ENREGISTREMENT DES CALLBACKS POUR EVITER LE CRASH ---
-            try { SetProcessDataProcW(hArc, _processDataProc); } catch { /* Ignore si non supporté */ }
-            try { SetChangeVolProcW(hArc, _changeVolProc); } catch { /* Ignore si non supporté */ }
+            try { SetProcessDataProcW(hArc, _processDataProc); } catch { }
+            try { SetChangeVolProcW(hArc, _changeVolProc); } catch { }
 
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
@@ -241,25 +232,15 @@ public class Program
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
                 string fullDestPath = Path.Combine(destinationDirPath, relativePath);
                 
-                if ((headerData.hdFileAttr & 0x10) != 0) // Si c'est un dossier
+                if ((headerData.hdFileAttr & 0x10) != 0)
                 {
-                    Console.WriteLine($"Skipping directory: {relativePath}");
                     ProcessFileW(hArc, PK_SKIP, null, null);
                 }
-                else // Fichier classique
+                else
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
                     Console.WriteLine($"Extracting: {relativePath}");
-                    
-                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
-                    
-                    if (processResult != E_SUCCESS)
-                        Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
-
-                    // DEBUG PAUSE
-                    // Console.WriteLine("PAUSE : Regarde s'il y a une fenêtre pop-up et lis l'erreur.");
-                    // Console.WriteLine("Appuie sur ENTRÉE dans cette console pour continuer...");
-                    // Console.ReadLine();
+                    ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
                 }
             }
             Console.WriteLine("Decompression successful.");
