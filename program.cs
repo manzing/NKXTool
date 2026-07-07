@@ -88,6 +88,10 @@ public class Program
 
     public static int Main(string[] args)
     {
+        // Forcer le répertoire de travail pour que inNKX.wcx trouve et crée ses fichiers .userdb / .ini
+        string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        Directory.SetCurrentDirectory(exeDirectory);
+
         if (args.Length < 3)
         {
             Console.WriteLine("Usage: NkxTool <compress|decompress> <sourcePath> <destinationPath>");
@@ -200,10 +204,15 @@ public class Program
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
                     Console.WriteLine($"Extracting: {relativePath}");
                     
-                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, null);
+                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, fullDestPath);
                     
                     if (processResult != E_SUCCESS)
                         Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
+
+                    // ON MET EN PAUSE ICI
+                    Console.WriteLine("PAUSE : Regarde s'il y a une fenêtre pop-up et lis l'erreur.");
+                    Console.WriteLine("Appuie sur ENTRÉE dans cette console pour continuer...");
+                    Console.ReadLine();
                 }
             }
             Console.WriteLine("Decompression successful.");
