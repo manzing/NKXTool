@@ -94,6 +94,9 @@ public class Program
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern void SetProcessDataProcW(IntPtr hArc, ProcessDataProcWDelegate pProcessDataProc);
 
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
+    private static extern void SetChangeVolProcW(IntPtr hArc, ChangeVolProcWDelegate pChangeVolProc);
+
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
