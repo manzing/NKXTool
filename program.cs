@@ -130,29 +130,46 @@ public class Program
         if (!string.IsNullOrEmpty(outDir))
             Directory.CreateDirectory(outDir);
 
-        // Préparation du dossier source avec l'antislash final impératif
         string srcPath = Path.GetFullPath(sourceFolderPath);
         if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) 
             srcPath += Path.DirectorySeparatorChar;
 
-        string listStr = "*.*" + "\0\0";
+        // On liste explicitement tous les fichiers à l'intérieur du dossier
+        List<string> filesToPack = new List<string>();
+        foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
+        {
+            filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
+        }
+
+        if (filesToPack.Count == 0)
+        {
+            Console.WriteLine("Error: The source directory is empty.");
+            return 1;
+        }
+
+        // On crée la liste séparée par des caractères nuls et terminée par un double nul
+        string listStr = string.Join("\0", filesToPack) + "\0\0";
         byte[] listBytes = Encoding.Unicode.GetBytes(listStr);
         IntPtr pAddList = Marshal.AllocHGlobal(listBytes.Length);
         Marshal.Copy(listBytes, 0, pAddList, listBytes.Length);
 
         try
         {
-            Console.WriteLine($"Compressing contents of '{srcPath}' into '{outputNkxFilePath}'...");
+            Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
             
-            // On enregistre les Callbacks au cas où le plugin veuille afficher une barre de progression pendant la compression
-            try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
-
             int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
-                Console.WriteLine($"Compression successful: {outputNkxFilePath}");
+            {
+                if (File.Exists(outputNkxFilePath))
+                    Console.WriteLine($"Compression successful: {outputNkxFilePath}");
+                else
+                    Console.WriteLine("Plugin reported success, but the archive file was not created.");
+            }
             else
+            {
                 Console.WriteLine($"Plugin failed with code: {result}");
+            }
             
             return result;
         }
