@@ -11,13 +11,12 @@ public class Program
     public const int PK_PACK_SAVE_PATHS = 2;
     public const int PK_SKIP = 0;
     public const int PK_EXTRACT = 2;
-    public const int PK_OVERWRITE = 0x0008;
     public const int PK_OM_EXTRACT = 1;
-
     public const int E_SUCCESS = 0;
     public const int E_END_ARCHIVE = 10;
     
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+    // CORRECTION 1: On retire le Pack = 1 pour respecter l'alignement naturel 64 bits
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW_WCXPlugin
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 1024)] public string hdArcNameW;
@@ -40,7 +39,7 @@ public class Program
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 1024)] public byte[] hdReserved;
     }
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode, Pack = 1)]
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tOpenArchiveDataW_WCXPlugin
     {
         public IntPtr ArcName;
@@ -52,20 +51,20 @@ public class Program
         public int CmtState;
     }
 
-    // Signature corrigée (5 paramètres au lieu de 4)
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern int PackFilesW(string PackedFile, string SubPath, string SrcPath, IntPtr AddList, int Flags);
 
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataW_WCXPlugin OpenArchiveData);
 
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_WCXPlugin HeaderData);
 
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
-    private static extern int ProcessFileW(IntPtr hArc, int Operation, IntPtr DestPath, IntPtr DestName);
+    // CORRECTION 2: Utilisation de strings pour gérer la mémoire automatiquement
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
+    private static extern int ProcessFileW(IntPtr hArc, int Operation, string? DestPath, string? DestName);
 
-    [DllImport(PluginDllName, CallingConvention = CallingConvention.StdCall)]
+    [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
     public static int Main(string[] args)
@@ -94,6 +93,7 @@ public class Program
         catch (Exception ex)
         {
             Console.WriteLine($"Critical Error: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
         }
         return 1;
     }
@@ -105,14 +105,12 @@ public class Program
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath));
 
-        // Génération de la liste de fichiers avec chemins relatifs
         List<string> filesToPack = new List<string>();
         foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
         {
             filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
         }
 
-        // Sécurisation de la mémoire pour la liste double-null-terminated
         string listStr = string.Join("\0", filesToPack) + "\0\0";
         byte[] listBytes = Encoding.Unicode.GetBytes(listStr);
         IntPtr pAddList = Marshal.AllocHGlobal(listBytes.Length);
@@ -120,7 +118,6 @@ public class Program
 
         try
         {
-            // SrcPath doit se terminer par un séparateur pour le plugin WCX
             string srcPath = sourceFolderPath;
             if (!srcPath.EndsWith(Path.DirectorySeparatorChar)) srcPath += Path.DirectorySeparatorChar;
 
@@ -165,16 +162,18 @@ public class Program
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
                 string fullDestPath = Path.Combine(destinationDirPath, relativePath);
                 
-                if ((headerData.hdFileAttr & 0x10) != 0) // C'est un dossier
+                if ((headerData.hdFileAttr & 0x10) != 0) // Si c'est un dossier
                 {
-                    ProcessFileW(hArc, PK_SKIP, IntPtr.Zero, IntPtr.Zero);
+                    Console.WriteLine($"Skipping directory: {relativePath}");
+                    ProcessFileW(hArc, PK_SKIP, null, null);
                 }
-                else // C'est un fichier
+                else // Fichier classique
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
-                    IntPtr pDestName = Marshal.StringToHGlobalUni(fullDestPath);
-                    int processResult = ProcessFileW(hArc, PK_EXTRACT, IntPtr.Zero, pDestName);
-                    Marshal.FreeHGlobal(pDestName);
+                    Console.WriteLine($"Extracting: {relativePath}");
+                    
+                    // On passe le dossier de destination ET le chemin final pour éviter tout plantage du plugin
+                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destinationDirPath, fullDestPath);
                     
                     if (processResult != E_SUCCESS)
                         Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
