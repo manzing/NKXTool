@@ -2,11 +2,17 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net6.0</TargetFramework> <ImplicitUsings>enable</ImplicitUsings> <Nullable>enable</Nullable>
+    <TargetFramework>net6.0</TargetFramework> 
+    <ImplicitUsings>enable</ImplicitUsings> 
     <Nullable>enable</Nullable>
-    <PublishSingleFile>true</PublishSingleFile> <SelfContained>false</SelfContained> <RuntimeIdentifier>win-x86</RuntimeIdentifier> </PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile> 
+    <SelfContained>false</SelfContained> 
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
 
-  <Target Name="CopyNkxPlugin" AfterTargets="Publish"> <Copy SourceFiles="$(ProjectDir)inNKX.wcx" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  <Target Name="CopyNkxPlugin" AfterTargets="Publish"> 
+    <Copy SourceFiles="$(ProjectDir)inNKX.wcx64" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>
