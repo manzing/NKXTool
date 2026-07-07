@@ -80,7 +80,7 @@ public class Program
     private static extern void PackSetDefaultParams(ref PackDefaultParamStruct dps);
 
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
-    private static extern int PackFilesW(string PackedFile, string SubPath, string SrcPath, IntPtr AddList, int Flags);
+    private static extern int PackFilesW(string PackedFile, string? SubPath, string SrcPath, IntPtr AddList, int Flags);
 
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataW_WCXPlugin OpenArchiveData);
@@ -167,14 +167,13 @@ public class Program
 
         if (filesToPack.Count == 0) return 1;
 
-        // Allocation hyper-sécurisée de la liste AddList (Unicode, double null)
         List<byte> listBytes = new List<byte>();
         foreach (string file in filesToPack)
         {
             listBytes.AddRange(Encoding.Unicode.GetBytes(file));
             listBytes.Add(0); listBytes.Add(0);
         }
-        listBytes.Add(0); listBytes.Add(0); // Terminaison finale
+        listBytes.Add(0); listBytes.Add(0); 
 
         byte[] finalBytes = listBytes.ToArray();
         IntPtr pAddList = Marshal.AllocHGlobal(finalBytes.Length);
@@ -184,8 +183,13 @@ public class Program
         {
             Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
             
-            // On passe "" pour SubPath afin de ne jamais envoyer de pointeur Null
-            int result = PackFilesW(outputNkxFilePath, "", srcPath, pAddList, PK_PACK_SAVE_PATHS);
+            // --- LA CORRECTION EST ICI ---
+            // On informe le plugin de nos fonctions de progression avant de lancer la compression (Handle 0)
+            try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
+            try { SetChangeVolProcW(IntPtr.Zero, _changeVolProc); } catch { }
+            
+            // Appel avec 'null' pour SubPath comme le fait Double Commander
+            int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
             {
