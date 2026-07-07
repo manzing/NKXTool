@@ -15,7 +15,6 @@ public class Program
     public const int E_SUCCESS = 0;
     public const int E_END_ARCHIVE = 10;
     
-    // CORRECTION 1: On retire le Pack = 1 pour respecter l'alignement naturel 64 bits
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW_WCXPlugin
     {
@@ -51,6 +50,21 @@ public class Program
         public int CmtState;
     }
 
+    // --- DELEGATES POUR LES CALLBACKS DE PROGRESSION ---
+    [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    public delegate int ProcessDataProcWDelegate(string FileName, int Size);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    public delegate int ChangeVolProcWDelegate(string ArcName, int Mode);
+
+    // On doit garder une référence statique pour éviter que le Garbage Collector ne les supprime
+    private static ProcessDataProcWDelegate _processDataProc = new ProcessDataProcWDelegate(OnProcessData);
+    private static ChangeVolProcWDelegate _changeVolProc = new ChangeVolProcWDelegate(OnChangeVol);
+
+    private static int OnProcessData(string FileName, int Size) { return 1; } // 1 = Continuer
+    private static int OnChangeVol(string ArcName, int Mode) { return 1; } // 1 = Continuer
+
+    // --- IMPORTS DES FONCTIONS ---
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern int PackFilesW(string PackedFile, string SubPath, string SrcPath, IntPtr AddList, int Flags);
 
@@ -60,9 +74,14 @@ public class Program
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern int ReadHeaderExW(IntPtr hArc, ref tHeaderDataExW_WCXPlugin HeaderData);
 
-    // CORRECTION 2: Utilisation de strings pour gérer la mémoire automatiquement
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern int ProcessFileW(IntPtr hArc, int Operation, string? DestPath, string? DestName);
+
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
+    private static extern void SetProcessDataProcW(IntPtr hArc, ProcessDataProcWDelegate pProcessDataProc);
+
+    [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
+    private static extern void SetChangeVolProcW(IntPtr hArc, ChangeVolProcWDelegate pChangeVolProc);
 
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
@@ -119,7 +138,7 @@ public class Program
         try
         {
             string srcPath = sourceFolderPath;
-            if (!srcPath.EndsWith(Path.DirectorySeparatorChar)) srcPath += Path.DirectorySeparatorChar;
+            if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) srcPath += Path.DirectorySeparatorChar;
 
             Console.WriteLine($"Compressing {filesToPack.Count} files...");
             int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
@@ -141,6 +160,11 @@ public class Program
     {
         Directory.CreateDirectory(destinationDirPath);
         
+        // Sécurité : Forcer le backslash à la fin du chemin cible
+        string destPathW = destinationDirPath;
+        if (!destPathW.EndsWith(Path.DirectorySeparatorChar.ToString()))
+            destPathW += Path.DirectorySeparatorChar;
+
         tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin { OpenMode = PK_OM_EXTRACT };
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
         openArcData.ArcName = pArcName;
@@ -156,6 +180,10 @@ public class Program
 
         try
         {
+            // --- ENREGISTREMENT DES CALLBACKS POUR EVITER LE CRASH ---
+            try { SetProcessDataProcW(hArc, _processDataProc); } catch { /* Ignore si non supporté */ }
+            try { SetChangeVolProcW(hArc, _changeVolProc); } catch { /* Ignore si non supporté */ }
+
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
@@ -172,8 +200,7 @@ public class Program
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
                     Console.WriteLine($"Extracting: {relativePath}");
                     
-                    // On passe le dossier de destination ET le chemin final pour éviter tout plantage du plugin
-                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destinationDirPath, fullDestPath);
+                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, fullDestPath);
                     
                     if (processResult != E_SUCCESS)
                         Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
