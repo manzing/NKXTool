@@ -65,8 +65,17 @@ public class Program
     private static int OnChangeVol(string ArcName, int Mode) { return 1; } // 1 = Continuer
 
     // --- IMPORTS DES FONCTIONS ---
+    [DllImport(PluginDllName)]
+    private static extern int GetPackCaps();
+
+    // On modifie l'import de PackFilesW pour sécuriser les chaînes et forcer IntPtr pour SubPath
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
-    private static extern int PackFilesW(string PackedFile, string SubPath, string SrcPath, IntPtr AddList, int Flags);
+    private static extern int PackFilesW(
+        [MarshalAs(UnmanagedType.LPWStr)] string PackedFile, 
+        IntPtr SubPath, 
+        [MarshalAs(UnmanagedType.LPWStr)] string SrcPath, 
+        IntPtr AddList, 
+        int Flags);
 
     [DllImport(PluginDllName, CharSet = CharSet.Unicode)]
     private static extern IntPtr OpenArchiveW(ref tOpenArchiveDataW_WCXPlugin OpenArchiveData);
@@ -123,12 +132,26 @@ public class Program
 
     private static int CompressFolder(string sourceFolderPath, string outputNkxFilePath)
     {
+        // --- VERIFICATION DES CAPACITES DU PLUGIN ---
+        try
+        {
+            int caps = GetPackCaps();
+            Console.WriteLine($"[Debug] Plugin capabilities code: {caps}");
+            
+            // 1 = PK_CAPS_NEW (Peut créer de nouvelles archives)
+            if ((caps & 1) == 0)
+            {
+                Console.WriteLine("ATTENTION : Le plugin inNKX a répondu qu'il NE SUPPORTE PAS la création d'archives.");
+                Console.WriteLine("La fonction PackFilesW risque de planter car elle n'est pas codée dans la DLL.");
+            }
+        }
+        catch { /* Ignoré si GetPackCaps n'existe pas */ }
+        // ---------------------------------------------
+
         if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
             outputNkxFilePath = Path.Combine(outputNkxFilePath, new DirectoryInfo(sourceFolderPath).Name + ".nkx");
 
-        string? outDir = Path.GetDirectoryName(outputNkxFilePath);
-        if (!string.IsNullOrEmpty(outDir))
-            Directory.CreateDirectory(outDir);
+        Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath) ?? string.Empty);
 
         string srcPath = Path.GetFullPath(sourceFolderPath);
         if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) 
@@ -140,45 +163,27 @@ public class Program
             filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
         }
 
-        if (filesToPack.Count == 0)
-        {
-            Console.WriteLine("Error: The source directory is empty.");
-            return 1;
-        }
+        if (filesToPack.Count == 0) return 1;
 
-        // Créer la liste avec des null-terminators ANSI (au cas où le plugin soit capricieux)
-        // Mais comme on appelle PackFilesW (W pour Wide/Unicode), on va utiliser UTF-16 (Unicode).
         string listStr = string.Join("\0", filesToPack) + "\0\0";
-        
-        // C'est souvent ici que ça plante: Marshal.StringToHGlobalUni alloue proprement 
-        // une chaîne Wide String terminée par deux nuls en mémoire non managée, 
-        // ce qui est bien plus sûr que notre manipulation manuelle de byte[]
         IntPtr pAddList = Marshal.StringToHGlobalUni(listStr);
 
         try
         {
             Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
             
-            // Correction clé : Passer "" au lieu de null pour SubPath
-            int result = PackFilesW(outputNkxFilePath, "", srcPath, pAddList, PK_PACK_SAVE_PATHS);
+            // On passe IntPtr.Zero pour SubPath (Très important pour éviter les pointeurs corrompus)
+            int result = PackFilesW(outputNkxFilePath, IntPtr.Zero, srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
             if (result == E_SUCCESS)
-            {
-                if (File.Exists(outputNkxFilePath))
-                    Console.WriteLine($"Compression successful: {outputNkxFilePath}");
-                else
-                    Console.WriteLine("Plugin reported success, but the archive file was not created.");
-            }
+                Console.WriteLine($"Compression successful: {outputNkxFilePath}");
             else
-            {
                 Console.WriteLine($"Plugin failed with code: {result}");
-            }
             
             return result;
         }
         finally
         {
-            // Toujours libérer la mémoire !
             Marshal.FreeHGlobal(pAddList);
         }
     }
