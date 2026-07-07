@@ -3,6 +3,9 @@
 This is a command-line utility for compressing folders into Kontakt NKX archives and decompressing NKX archives,
 by directly interacting with the `inNKX.wcx` plugin. 
 
+## Important note
+Work in progress, only extraction is supported for now!
+
 ## Features
 
 - **Compress:** Pack a folder (including its subdirectories and files) into a `.nkx` archive.
