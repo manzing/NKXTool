@@ -204,7 +204,7 @@ public class Program
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
                     Console.WriteLine($"Extracting: {relativePath}");
                     
-                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, fullDestPath);
+                    int processResult = ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
                     
                     if (processResult != E_SUCCESS)
                         Console.WriteLine($"Error extracting {relativePath} (Code: {processResult})");
