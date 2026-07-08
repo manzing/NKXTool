@@ -110,7 +110,7 @@ public class Program
             Console.WriteLine("Usage:");
             Console.WriteLine("  NkxTool unpack <source.nkx> <destinationFolder>");
             Console.WriteLine("  NkxTool pack <destination.nkx> <sourceFolder_OR_@filelist.txt> [rootPath]");
-            Console.WriteLine("  NkxTool list <source.nkx>");
+            Console.WriteLine("  NkxTool list <source.nkx> [outputList.txt]");
             return 1;
         }
 
@@ -132,7 +132,8 @@ public class Program
         {
             if (operation == "list")
             {
-                return ListArchive(path1);
+                string? outList = args.Length >= 3 ? Path.GetFullPath(args[2]) : null;
+                return ListArchive(path1, outList);
             }
             else if (operation == "unpack" && args.Length >= 3)
             {
@@ -157,7 +158,7 @@ public class Program
         return 1;
     }
 
-    private static int ListArchive(string sourceNkxPath)
+    private static int ListArchive(string sourceNkxPath, string? outputListPath)
     {
         tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin { OpenMode = PK_OM_EXTRACT };
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
@@ -171,15 +172,32 @@ public class Program
         try
         {
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
+            List<string> fileList = new List<string>();
+
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-                if ((headerData.hdFileAttr & 0x10) == 0) // N'afficher que les fichiers, pas les dossiers
+                
+                if ((headerData.hdFileAttr & 0x10) == 0) // N'ajouter que les fichiers
                 {
-                    Console.WriteLine(relativePath);
+                    fileList.Add(relativePath);
                 }
-                ProcessFileW(hArc, PK_SKIP, null, null); // Avancer sans extraire
+                ProcessFileW(hArc, PK_SKIP, null, null);
             }
+
+            if (!string.IsNullOrEmpty(outputListPath))
+            {
+                File.WriteAllLines(outputListPath, fileList, Encoding.UTF8);
+                Console.WriteLine($"List saved to: {outputListPath} ({fileList.Count} files)");
+            }
+            else
+            {
+                foreach (string file in fileList)
+                {
+                    Console.WriteLine(file);
+                }
+            }
+
             return E_SUCCESS;
         }
         finally
