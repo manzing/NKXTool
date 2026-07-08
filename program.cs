@@ -6,7 +6,7 @@ using System.Collections.Generic;
 
 public class Program
 {
-    private const string PluginDllName = "inNKX.wcx64";
+    private const string PluginDllName = "inNKX.wcx"; // Modifie si besoin (inNKX.wcx64)
 
     public const int PK_PACK_SAVE_PATHS = 2;
     public const int PK_SKIP = 0;
@@ -51,7 +51,6 @@ public class Program
         public int CmtState;
     }
 
-    // NOUVELLE STRUCTURE D'INITIALISATION
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     public struct PackDefaultParamStruct
     {
@@ -103,23 +102,21 @@ public class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        // Fixer le répertoire de travail
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
-        if (args.Length < 3)
+        if (args.Length < 2)
         {
-            Console.WriteLine("Usage: NkxTool <compress|decompress> <sourcePath> <destinationPath>");
+            Console.WriteLine("Usage:");
+            Console.WriteLine("  NkxTool unpack <source.nkx> <destinationFolder>");
+            Console.WriteLine("  NkxTool pack <destination.nkx> <sourceFolder_OR_@filelist.txt> [rootPath]");
+            Console.WriteLine("  NkxTool list <source.nkx>");
             return 1;
         }
 
         string operation = args[0].ToLowerInvariant();
-        string sourcePath = Path.GetFullPath(args[1]);
-        string destinationPath = Path.GetFullPath(args[2]);
+        string path1 = Path.GetFullPath(args[1]);
 
-        Console.WriteLine($"[NkxTool x64] Operation: {operation}");
-
-        // --- INITIALISATION DU PLUGIN (Simulation de Double Commander) ---
         try
         {
             PackDefaultParamStruct dps = new PackDefaultParamStruct();
@@ -127,50 +124,109 @@ public class Program
             dps.PluginInterfaceVersionLow = 1;
             dps.PluginInterfaceVersionHi = 2;
             dps.DefaultIniName = Path.Combine(exeDirectory, "inNKX.ini");
-
             PackSetDefaultParams(ref dps);
         }
-        catch { /* Certains plugins n'ont pas cette fonction, on l'ignore si c'est le cas */ }
+        catch { }
 
         try
         {
-            if (operation == "compress")
-                return CompressFolder(sourcePath, destinationPath);
-            else if (operation == "decompress")
-                return DecompressArchive(sourcePath, destinationPath);
+            if (operation == "list")
+            {
+                return ListArchive(path1);
+            }
+            else if (operation == "unpack" && args.Length >= 3)
+            {
+                return DecompressArchive(path1, Path.GetFullPath(args[2]));
+            }
+            else if (operation == "pack" && args.Length >= 3)
+            {
+                // Pour filelist, on peut avoir besoin d'un chemin de base (rootPath)
+                string rootPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : "";
+                return CompressFolder(args[2], path1, rootPath);
+            }
             else
-                Console.WriteLine("Invalid operation.");
+            {
+                Console.WriteLine("Invalid operation or missing arguments.");
+                return 1;
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Critical Error: {ex.Message}");
-            Console.WriteLine(ex.StackTrace);
         }
         return 1;
     }
 
-    private static int CompressFolder(string sourceFolderPath, string outputNkxFilePath)
+    private static int ListArchive(string sourceNkxPath)
+    {
+        tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin { OpenMode = PK_OM_EXTRACT };
+        IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
+        openArcData.ArcName = pArcName;
+
+        IntPtr hArc = OpenArchiveW(ref openArcData);
+        Marshal.FreeHGlobal(pArcName);
+
+        if (hArc == IntPtr.Zero) return 1;
+
+        try
+        {
+            tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
+            while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
+            {
+                string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
+                if ((headerData.hdFileAttr & 0x10) == 0) // N'afficher que les fichiers, pas les dossiers
+                {
+                    Console.WriteLine(relativePath);
+                }
+                ProcessFileW(hArc, PK_SKIP, null, null); // Avancer sans extraire
+            }
+            return E_SUCCESS;
+        }
+        finally
+        {
+            CloseArchive(hArc);
+        }
+    }
+
+    private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
     {
         if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
-            outputNkxFilePath = Path.Combine(outputNkxFilePath, new DirectoryInfo(sourceFolderPath).Name + ".nkx");
+            outputNkxFilePath += ".nkx";
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath) ?? string.Empty);
 
-        string srcPath = Path.GetFullPath(sourceFolderPath);
+        List<string> filesToPack = new List<string>();
+        string srcPath = "";
+
+        if (sourceOrList.StartsWith("@"))
+        {
+            // Mode FileList : sourceOrList = @c:\temp\list.txt
+            string listFile = sourceOrList.Substring(1);
+            if (!File.Exists(listFile)) return 1;
+            
+            // Le rootPath sert de préfixe "SrcPath" pour le plugin (dossier de base)
+            srcPath = string.IsNullOrEmpty(rootPath) ? Path.GetDirectoryName(listFile) ?? "" : rootPath;
+            filesToPack.AddRange(File.ReadAllLines(listFile));
+        }
+        else
+        {
+            // Mode Dossier classique
+            srcPath = Path.GetFullPath(sourceOrList);
+            foreach (string file in Directory.GetFiles(sourceOrList, "*", SearchOption.AllDirectories))
+            {
+                filesToPack.Add(Path.GetRelativePath(sourceOrList, file));
+            }
+        }
+
         if (!srcPath.EndsWith(Path.DirectorySeparatorChar.ToString())) 
             srcPath += Path.DirectorySeparatorChar;
-
-        List<string> filesToPack = new List<string>();
-        foreach (string file in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
-        {
-            filesToPack.Add(Path.GetRelativePath(sourceFolderPath, file));
-        }
 
         if (filesToPack.Count == 0) return 1;
 
         List<byte> listBytes = new List<byte>();
         foreach (string file in filesToPack)
         {
+            if (string.IsNullOrWhiteSpace(file)) continue;
             listBytes.AddRange(Encoding.Unicode.GetBytes(file));
             listBytes.Add(0); listBytes.Add(0);
         }
@@ -182,27 +238,17 @@ public class Program
 
         try
         {
-            Console.WriteLine($"Compressing {filesToPack.Count} files from '{srcPath}' into '{outputNkxFilePath}'...");
+            Console.WriteLine($"Packing {filesToPack.Count} files into '{outputNkxFilePath}'...");
             
-            // --- LA CORRECTION EST ICI ---
-            // On informe le plugin de nos fonctions de progression avant de lancer la compression (Handle 0)
             try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
             try { SetChangeVolProcW(IntPtr.Zero, _changeVolProc); } catch { }
             
-            // Appel avec 'null' pour SubPath comme le fait Double Commander
             int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
 
-            if (result == E_SUCCESS)
-            {
-                if (File.Exists(outputNkxFilePath))
-                    Console.WriteLine($"Compression successful: {outputNkxFilePath}");
-                else
-                    Console.WriteLine("Plugin reported success, but the archive file was not created.");
-            }
+            if (result == E_SUCCESS && File.Exists(outputNkxFilePath))
+                Console.WriteLine("Success.");
             else
-            {
-                Console.WriteLine($"Plugin failed with code: {result}");
-            }
+                Console.WriteLine($"Failed. Code: {result}");
             
             return result;
         }
@@ -247,11 +293,11 @@ public class Program
                 else
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
-                    Console.WriteLine($"Extracting: {relativePath}");
+                    Console.WriteLine($"Unpacking: {relativePath}");
                     ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
                 }
             }
-            Console.WriteLine("Decompression successful.");
+            Console.WriteLine("Success.");
             return E_SUCCESS;
         }
         finally
