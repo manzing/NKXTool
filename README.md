@@ -1,62 +1,66 @@
-# NkxTool - A Direct NKX Compression/Decompression Utility
+# NkxTool - Advanced Kontakt Archive CLI Utility
 
-This is a command-line utility for compressing folders into Kontakt NKX archives and decompressing NKX archives,
-by directly interacting with the `inNKX.wcx` plugin. 
+NkxTool is a robust, 64-bit command-line utility for managing Native Instruments Kontakt archives. It acts as a specialized wrapper around the `inNKX.wcx64` plugin, allowing you to list files, extract, and seamlessly pack libraries.
 
-## Important note
-Work still in progress, extraction and archive creation MAY be functionnal.
+## 🚀 Key Features
 
-## Features
+- **Multi-Format Support:** Read and write `.nkx` (Audio/Samples), `.nkr` (Resources/Scripts), and `.nicnt` (Library Info) containers.
+- **Smart Packing (Auto-Split):** Automatically handles the strict 1.95 GB (`2,090,000,000` bytes) size limit of the NKX format. If a source folder exceeds this limit, NkxTool automatically splits the output into `_00.nkx`, `_01.nkx`, etc.
+- **Filelist Support:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), perfect for scripted audio conversions or selective repacking.
+- **COM STA Threading:** Fully initializes Windows COM components natively, ensuring the plugin can properly search for decryption keys and generate `.userdb` files.
+- **Modern Architecture:** Built with C# on .NET 10 (win-x64), completely standalone.
 
-- **Pack:** Pack a folder (including its subdirectories and files) into a `.nkx` archive.
-- **Unpack:** Extract the contents of a `.nkx` archive to a specified directory.
+## 📋 Requirements
 
-## Requirements
+-   [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (For building from source)
+-   `inNKX.wcx64` 64-bit plugin file (Must be placed in the project root before building, or in the same directory as the compiled executable).
 
--   [.NET SDK](https://dotnet.microsoft.com/download) (Version 10.0 or newer recommended)
--   `inNKX.wcx` plugin file (must be placed in the project root before building).
+## 🛠️ Usage
 
-## Setup and Compilation
+Open your terminal and use `NkxTool.exe` with one of the three main commands: `list`, `unpack`, or `pack`.
 
-1.  **Clone this repository:**
-    ```bash
-    git clone [https://github.com/YourUsername/NkxTool.git](https://github.com/YourUsername/NkxTool.git)
-    cd NkxTool
-    ```
+### 1. List Archive Contents
+Outputs the relative paths of all files contained inside an archive. You can optionally save this output to a text file.
+```cmd
+NkxTool list <source_file> [outputList.txt]
 
-2.  **Place `inNKX.wcx`:**
-    Download or copy your `inNKX.wcx64` plugin file into the **root directory of this project** (where `NkxTool.csproj` is located).
+# Examples:
+NkxTool list "C:\Library\Samples_1.nkx"
+NkxTool list "C:\Library\Samples_1.nkx" "C:\temp\filelist.txt"
+```
 
-3.  **Compile the project:**
-    Open your terminal (Command Prompt, PowerShell, or Git Bash) in the `NkxTool` project root and run:
-    ```bash
-    dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
-    ```
-    This command will:
-    -   `publish`: Create a ready-to-deploy output.
-    -   `-c Release`: Build in Release mode (optimized, smaller).
-    -   `-r win-x64`: Target Windows 64-bit runtime.
-    -   `--self-contained false`: Assume the .NET runtime is installed on the target machine (makes the executable smaller).
-    -   `/p:PublishSingleFile=true`: Create a single executable file.
+### 2. Unpack (Decompress)
+Extracts the entire content of an archive into the specified destination folder, recreating the original directory structure.
+```cmd
+NkxTool unpack <source_file> <destinationFolder>
 
-4.  **Find the executable:**
-    The compiled executable (`NkxTool.exe`) and the `inNKX.wcx64` plugin (copied automatically by the build process) will be located in the `bin\Release\netX.0\win-x64\publish\` directory (where `X.0` is your .NET target framework version, e.g., `net10.0`).
+# Example:
+NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\"
+```
 
-## Usage
+### 3. Pack (Compress)
+Creates a new archive from a source folder or a text file containing a list of relative paths.
+```cmd
+NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]
 
-Navigate to the directory where `NkxTool.exe` was published (e.g., `bin\Release\net8.0\win-x64\publish\`) in your terminal.
+# Example A: Pack an entire folder
+NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
 
+# Example B: Pack using a file list (requires '@')
+# If the text file is located alongside the source samples, rootPath is optional.
+NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
+```
+
+## 🏗️ Compilation
+
+To compile the project into a single, optimized executable:
+
+1. Place your 64-bit `inNKX.wcx` file in the root directory next to `NkxTool.csproj`.
+2. Run the following .NET CLI command:
 ```bash
-# Compress a folder into an NKX archive
-NkxTool.exe pack "<path_to_source_folder>" "<path_to_output_directory>"
+dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
+```
+The compiled `NkxTool.exe` will be located in the `bin\Release\net10.0\win-x64\publish\` directory.
 
-# Example:
-NkxTool.exe pack "C:\MySamples\AwesomeSynth" "C:\MyNkxArchives"
-# This will create "AwesomeSynth.nkx" inside "C:\MyNkxArchives"
-
-# Decompress an NKX archive
-NkxTool.exe unpack "<path_to_nkx_file>" "<path_to_output_directory>"
-
-# Example:
-NkxTool.exe unpack "C:\MyNkxArchives\AwesomeSynth.nkx" "C:\ExtractedSamples"
-# This will extract the contents of "AwesomeSynth.nkx" into "C:\ExtractedSamples"
+## ⚠️ Notes on Decryption
+NkxTool acts as a bridge. If an archive is protected, the underlying WCX plugin will attempt to locate the decryption key on your Windows system using standard Registry/COM calls. If the library is not properly registered on your system, the files may still extract, but they could be unreadable or empty, depending on the plugin's internal behavior.
