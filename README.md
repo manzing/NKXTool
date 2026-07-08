@@ -8,12 +8,12 @@ Work still in progress, extraction and archive creation MAY be functionnal.
 
 ## Features
 
-- **Compress:** Pack a folder (including its subdirectories and files) into a `.nkx` archive.
-- **Decompress:** Extract the contents of a `.nkx` archive to a specified directory.
+- **Pack:** Pack a folder (including its subdirectories and files) into a `.nkx` archive.
+- **Unpack:** Extract the contents of a `.nkx` archive to a specified directory.
 
 ## Requirements
 
--   [.NET SDK](https://dotnet.microsoft.com/download) (Version 6.0 or newer recommended, e.g., .NET 8.0)
+-   [.NET SDK](https://dotnet.microsoft.com/download) (Version 10.0 or newer recommended)
 -   `inNKX.wcx` plugin file (must be placed in the project root before building).
 
 ## Setup and Compilation
@@ -25,7 +25,7 @@ Work still in progress, extraction and archive creation MAY be functionnal.
     ```
 
 2.  **Place `inNKX.wcx`:**
-    Download or copy your `inNKX.wcx` plugin file into the **root directory of this project** (where `NkxTool.csproj` is located).
+    Download or copy your `inNKX.wcx64` plugin file into the **root directory of this project** (where `NkxTool.csproj` is located).
 
 3.  **Compile the project:**
     Open your terminal (Command Prompt, PowerShell, or Git Bash) in the `NkxTool` project root and run:
@@ -40,7 +40,7 @@ Work still in progress, extraction and archive creation MAY be functionnal.
     -   `/p:PublishSingleFile=true`: Create a single executable file.
 
 4.  **Find the executable:**
-    The compiled executable (`NkxTool.exe`) and the `inNKX.wcx` plugin (copied automatically by the build process) will be located in the `bin\Release\netX.0\win-x64\publish\` directory (where `X.0` is your .NET target framework version, e.g., `net6.0`).
+    The compiled executable (`NkxTool.exe`) and the `inNKX.wcx64` plugin (copied automatically by the build process) will be located in the `bin\Release\netX.0\win-x64\publish\` directory (where `X.0` is your .NET target framework version, e.g., `net10.0`).
 
 ## Usage
 
@@ -48,15 +48,15 @@ Navigate to the directory where `NkxTool.exe` was published (e.g., `bin\Release\
 
 ```bash
 # Compress a folder into an NKX archive
-NkxTool.exe compress "<path_to_source_folder>" "<path_to_output_directory>"
+NkxTool.exe pack "<path_to_source_folder>" "<path_to_output_directory>"
 
 # Example:
-NkxTool.exe compress "C:\MySamples\AwesomeSynth" "C:\MyNkxArchives"
+NkxTool.exe pack "C:\MySamples\AwesomeSynth" "C:\MyNkxArchives"
 # This will create "AwesomeSynth.nkx" inside "C:\MyNkxArchives"
 
 # Decompress an NKX archive
-NkxTool.exe decompress "<path_to_nkx_file>" "<path_to_output_directory>"
+NkxTool.exe unpack "<path_to_nkx_file>" "<path_to_output_directory>"
 
 # Example:
-NkxTool.exe decompress "C:\MyNkxArchives\AwesomeSynth.nkx" "C:\ExtractedSamples"
+NkxTool.exe unpack "C:\MyNkxArchives\AwesomeSynth.nkx" "C:\ExtractedSamples"
 # This will extract the contents of "AwesomeSynth.nkx" into "C:\ExtractedSamples"
