@@ -19,7 +19,7 @@ jobs:
     - name: Setup .NET SDK # Étape 2: Installer le SDK .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '6.0.x' # Spécifiez la version de .NET que vous utilisez dans NkxTool.csproj
+        dotnet-version: '10.0.x' # Spécifiez la version de .NET que vous utilisez dans NkxTool.csproj
 
     - name: Restore dependencies # Étape 3: Restaurer les packages NuGet
       run: dotnet restore NkxTool.csproj # Assurez-vous que le chemin est correct si NkxTool.csproj n'est pas à la racine
