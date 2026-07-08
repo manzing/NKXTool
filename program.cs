@@ -100,6 +100,7 @@ public class Program
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
+    [STAThread]
     public static int Main(string[] args)
     {
         // Fixer le répertoire de travail
