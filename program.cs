@@ -6,7 +6,7 @@ using System.Collections.Generic;
 
 public class Program
 {
-    private const string PluginDllName = "inNKX.wcx"; // Modifie si besoin (inNKX.wcx64)
+    private const string PluginDllName = "inNKX.wcx64"; // Modifie si besoin (inNKX.wcx64)
 
     public const int PK_PACK_SAVE_PATHS = 2;
     public const int PK_SKIP = 0;
