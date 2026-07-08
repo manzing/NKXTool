@@ -108,14 +108,22 @@ public class Program
         if (args.Length < 2)
         {
             Console.WriteLine("Usage:");
-            Console.WriteLine("  NkxTool unpack <source.nkx> <destinationFolder>");
-            Console.WriteLine("  NkxTool pack <destination.nkx> <sourceFolder_OR_@filelist.txt> [rootPath]");
-            Console.WriteLine("  NkxTool list <source.nkx> [outputList.txt]");
+            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder>");
+            Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
+            Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
+            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt");
             return 1;
         }
 
         string operation = args[0].ToLowerInvariant();
         string path1 = Path.GetFullPath(args[1]);
+
+        // Vérification de l'existence du fichier source pour les commandes de lecture
+        if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
+        {
+            Console.WriteLine($"Error: The source file '{path1}' does not exist.");
+            return 1;
+        }
 
         try
         {
@@ -208,7 +216,9 @@ public class Program
 
     private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
     {
-        if (!outputNkxFilePath.EndsWith(".nkx", StringComparison.OrdinalIgnoreCase))
+        // 1. Support des extensions multiples (nkx, nkr, nicnt)
+        string ext = Path.GetExtension(outputNkxFilePath).ToLowerInvariant();
+        if (ext != ".nkx" && ext != ".nkr" && ext != ".nicnt")
             outputNkxFilePath += ".nkx";
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath) ?? string.Empty);
@@ -218,17 +228,14 @@ public class Program
 
         if (sourceOrList.StartsWith("@"))
         {
-            // Mode FileList : sourceOrList = @c:\temp\list.txt
             string listFile = sourceOrList.Substring(1);
             if (!File.Exists(listFile)) return 1;
             
-            // Le rootPath sert de préfixe "SrcPath" pour le plugin (dossier de base)
             srcPath = string.IsNullOrEmpty(rootPath) ? Path.GetDirectoryName(listFile) ?? "" : rootPath;
             filesToPack.AddRange(File.ReadAllLines(listFile));
         }
         else
         {
-            // Mode Dossier classique
             srcPath = Path.GetFullPath(sourceOrList);
             foreach (string file in Directory.GetFiles(sourceOrList, "*", SearchOption.AllDirectories))
             {
@@ -241,41 +248,84 @@ public class Program
 
         if (filesToPack.Count == 0) return 1;
 
-        List<byte> listBytes = new List<byte>();
+        // 2. Logique de découpage automatique (Limite à ~1.95 Go)
+        long maxSize = 2090000000L; 
+        List<List<string>> batches = new List<List<string>>();
+        List<string> currentBatch = new List<string>();
+        long currentSize = 0;
+
         foreach (string file in filesToPack)
         {
             if (string.IsNullOrWhiteSpace(file)) continue;
-            listBytes.AddRange(Encoding.Unicode.GetBytes(file));
-            listBytes.Add(0); listBytes.Add(0);
+            
+            string fullFilePath = Path.Combine(srcPath, file);
+            long fileSize = new FileInfo(fullFilePath).Length;
+
+            if (currentSize + fileSize > maxSize && currentBatch.Count > 0)
+            {
+                batches.Add(currentBatch);
+                currentBatch = new List<string>();
+                currentSize = 0;
+            }
+            currentBatch.Add(file);
+            currentSize += fileSize;
         }
-        listBytes.Add(0); listBytes.Add(0); 
+        if (currentBatch.Count > 0) batches.Add(currentBatch);
 
-        byte[] finalBytes = listBytes.ToArray();
-        IntPtr pAddList = Marshal.AllocHGlobal(finalBytes.Length);
-        Marshal.Copy(finalBytes, 0, pAddList, finalBytes.Length);
+        // 3. Compression par lot
+        int overallResult = E_SUCCESS;
 
-        try
+        for (int i = 0; i < batches.Count; i++)
         {
-            Console.WriteLine($"Packing {filesToPack.Count} files into '{outputNkxFilePath}'...");
+            string batchOutputPath = outputNkxFilePath;
             
-            try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
-            try { SetChangeVolProcW(IntPtr.Zero, _changeVolProc); } catch { }
-            
-            int result = PackFilesW(outputNkxFilePath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
+            // Si on a plusieurs lots, on ajoute le suffixe _00, _01...
+            if (batches.Count > 1)
+            {
+                string dir = Path.GetDirectoryName(outputNkxFilePath) ?? "";
+                string name = Path.GetFileNameWithoutExtension(outputNkxFilePath);
+                string batchExt = Path.GetExtension(outputNkxFilePath);
+                batchOutputPath = Path.Combine(dir, $"{name}_{i:D2}{batchExt}");
+            }
 
-            if (result == E_SUCCESS && File.Exists(outputNkxFilePath))
-                Console.WriteLine("Success.");
-            else
-                Console.WriteLine($"Failed. Code: {result}");
-            
-            return result;
+            List<byte> listBytes = new List<byte>();
+            foreach (string file in batches[i])
+            {
+                listBytes.AddRange(Encoding.Unicode.GetBytes(file));
+                listBytes.Add(0); listBytes.Add(0);
+            }
+            listBytes.Add(0); listBytes.Add(0); 
+
+            byte[] finalBytes = listBytes.ToArray();
+            IntPtr pAddList = Marshal.AllocHGlobal(finalBytes.Length);
+            Marshal.Copy(finalBytes, 0, pAddList, finalBytes.Length);
+
+            try
+            {
+                Console.WriteLine($"Packing batch {i + 1}/{batches.Count} ({batches[i].Count} files) into '{batchOutputPath}'...");
+                
+                try { SetProcessDataProcW(IntPtr.Zero, _processDataProc); } catch { }
+                try { SetChangeVolProcW(IntPtr.Zero, _changeVolProc); } catch { }
+                
+                int result = PackFilesW(batchOutputPath, null, srcPath, pAddList, PK_PACK_SAVE_PATHS);
+
+                if (result == E_SUCCESS && File.Exists(batchOutputPath))
+                {
+                    Console.WriteLine($"Batch {i + 1} success.");
+                }
+                else
+                {
+                    Console.WriteLine($"Batch {i + 1} failed. Code: {result}");
+                    overallResult = result;
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pAddList);
+            }
         }
-        finally
-        {
-            Marshal.FreeHGlobal(pAddList);
-        }
+        return overallResult;
     }
-
     private static int DecompressArchive(string sourceNkxPath, string destinationDirPath)
     {
         Directory.CreateDirectory(destinationDirPath);
