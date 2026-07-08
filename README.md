@@ -4,7 +4,7 @@ This is a command-line utility for compressing folders into Kontakt NKX archives
 by directly interacting with the `inNKX.wcx` plugin. 
 
 ## Important note
-Work in progress, only extraction is supported for now!
+Work still in progress, extraction and archive creation MAY be functionnal.
 
 ## Features
 
