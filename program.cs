@@ -379,7 +379,7 @@ public class Program
     private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles = null)
     {
         Directory.CreateDirectory(destinationDirPath);
-        
+
         string destPathW = destinationDirPath;
         if (!destPathW.EndsWith(Path.DirectorySeparatorChar.ToString()))
             destPathW += Path.DirectorySeparatorChar;
@@ -399,30 +399,80 @@ public class Program
             try { SetChangeVolProcW(hArc, _changeVolProc); } catch { }
 
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
+
+            int archiveFileCount = 0;
+            int matchedCount = 0;
+            int extractedCount = 0;
+            HashSet<string> foundFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
-                
                 bool isDirectory = (headerData.hdFileAttr & 0x10) != 0;
-                string normalizedRelativePath = NormalizeArchivePath(relativePath);
 
                 if (isDirectory)
                 {
                     ProcessFileW(hArc, PK_SKIP, null, null);
+                    continue;
                 }
-                else if (selectedFiles != null && !selectedFiles.Contains(normalizedRelativePath))
+
+                archiveFileCount++;
+
+                string normalizedRelativePath = NormalizeArchivePath(relativePath);
+                bool isSelected = selectedFiles == null || selectedFiles.Contains(normalizedRelativePath);
+
+                if (!isSelected)
                 {
                     ProcessFileW(hArc, PK_SKIP, null, null);
+                    continue;
+                }
+
+                matchedCount++;
+                foundFiles.Add(normalizedRelativePath);
+
+                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
+                string? fullDestDir = Path.GetDirectoryName(fullDestPath);
+
+                if (!string.IsNullOrEmpty(fullDestDir))
+                    Directory.CreateDirectory(fullDestDir);
+
+                Console.WriteLine($"Unpacking: {relativePath}");
+
+                int result = ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
+                if (result == E_SUCCESS)
+                {
+                    extractedCount++;
                 }
                 else
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath)!);
-                    Console.WriteLine($"Unpacking: {relativePath}");
-                    ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
+                    Console.WriteLine($"Warning: extraction failed for '{relativePath}' (code {result}).");
                 }
             }
-            Console.WriteLine("Success.");
+
+            if (selectedFiles == null)
+            {
+                Console.WriteLine($"Success. Extracted {extractedCount}/{archiveFileCount} file(s).");
+                return E_SUCCESS;
+            }
+
+            List<string> missingFiles = new List<string>();
+            foreach (string selected in selectedFiles)
+            {
+                if (!foundFiles.Contains(selected))
+                    missingFiles.Add(selected);
+            }
+
+            Console.WriteLine($"Success. Extracted {extractedCount} selected file(s) out of {matchedCount} matched file(s).");
+
+            if (missingFiles.Count > 0)
+            {
+                Console.WriteLine($"Warning: {missingFiles.Count} requested file(s) were not found in archive:");
+                foreach (string missing in missingFiles)
+                {
+                    Console.WriteLine($"  MISSING: {missing}");
+                }
+            }
+
             return E_SUCCESS;
         }
         finally
