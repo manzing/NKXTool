@@ -100,6 +100,15 @@ public class Program
     private static extern int CloseArchive(IntPtr hArc);
 
     [STAThread]
+    private static string NormalizeArchivePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return string.Empty;
+
+        return path.Trim()
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+    }
     public static int Main(string[] args)
     {
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
@@ -108,13 +117,13 @@ public class Program
         if (args.Length < 2)
         {
             Console.WriteLine("Usage:");
-            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder>");
+            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt | file1 file2 ...]");
             Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
             Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
             Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt");
             return 1;
         }
-
+        
         string operation = args[0].ToLowerInvariant();
         string path1 = Path.GetFullPath(args[1]);
 
@@ -145,7 +154,48 @@ public class Program
             }
             else if (operation == "unpack" && args.Length >= 3)
             {
-                return DecompressArchive(path1, Path.GetFullPath(args[2]));
+                HashSet<string>? selectedFiles = null;
+
+                if (args.Length >= 4)
+                {
+                    selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                    for (int i = 3; i < args.Length; i++)
+                    {
+                        string arg = args[i];
+
+                        if (arg.StartsWith("@"))
+                        {
+                            string listFile = Path.GetFullPath(arg.Substring(1));
+                            if (!File.Exists(listFile))
+                            {
+                                Console.WriteLine($"Error: File list '{listFile}' does not exist.");
+                                return 1;
+                            }
+
+                            foreach (string line in File.ReadAllLines(listFile))
+                            {
+                                string normalized = NormalizeArchivePath(line);
+                                if (!string.IsNullOrWhiteSpace(normalized))
+                                    selectedFiles.Add(normalized);
+                            }
+                        }
+                        else
+                        {
+                            string normalized = NormalizeArchivePath(arg);
+                            if (!string.IsNullOrWhiteSpace(normalized))
+                                selectedFiles.Add(normalized);
+                        }
+                    }
+
+                    if (selectedFiles.Count == 0)
+                    {
+                        Console.WriteLine("Error: No files selected for extraction.");
+                        return 1;
+                    }
+                }
+
+                return DecompressArchive(path1, Path.GetFullPath(args[2]), selectedFiles);
             }
             else if (operation == "pack" && args.Length >= 3)
             {
@@ -326,7 +376,7 @@ public class Program
         }
         return overallResult;
     }
-    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath)
+    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles = null)
     {
         Directory.CreateDirectory(destinationDirPath);
         
@@ -354,13 +404,20 @@ public class Program
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
                 string fullDestPath = Path.Combine(destinationDirPath, relativePath);
                 
-                if ((headerData.hdFileAttr & 0x10) != 0)
+                bool isDirectory = (headerData.hdFileAttr & 0x10) != 0;
+                string normalizedRelativePath = NormalizeArchivePath(relativePath);
+
+                if (isDirectory)
+                {
+                    ProcessFileW(hArc, PK_SKIP, null, null);
+                }
+                else if (selectedFiles != null && !selectedFiles.Contains(normalizedRelativePath))
                 {
                     ProcessFileW(hArc, PK_SKIP, null, null);
                 }
                 else
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath));
+                    Directory.CreateDirectory(Path.GetDirectoryName(fullDestPath)!);
                     Console.WriteLine($"Unpacking: {relativePath}");
                     ProcessFileW(hArc, PK_EXTRACT, destPathW, relativePath);
                 }
