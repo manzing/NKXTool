@@ -7,13 +7,18 @@ using System.Collections.Generic;
 public class Program
 {
     private const string PluginDllName = "inNKX.wcx64";
-
     public const int PK_PACK_SAVE_PATHS = 2;
     public const int PK_SKIP = 0;
     public const int PK_EXTRACT = 2;
     public const int PK_OM_EXTRACT = 1;
     public const int E_SUCCESS = 0;
     public const int E_END_ARCHIVE = 10;
+    // Formats supportés
+    private static readonly HashSet<string> SupportedArchiveExtensions =
+    new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ".nkx", ".nkr", ".nicnt", ".nks"
+    };
     
     // --- STRUCTURES ---
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
