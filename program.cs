@@ -120,7 +120,7 @@ public class Program
             Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt | file1 file2 ...]");
             Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
             Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
-            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt");
+            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nks, .nicnt");
             return 1;
         }
         
@@ -128,10 +128,16 @@ public class Program
         string path1 = Path.GetFullPath(args[1]);
 
         // Vérification de l'existence du fichier source pour les commandes de lecture
-        if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
+        if (operation == "list" || operation == "unpack")
         {
-            Console.WriteLine($"Error: The source file '{path1}' does not exist.");
-            return 1;
+            string inputExt = Path.GetExtension(path1);
+
+            if (!SupportedArchiveExtensions.Contains(inputExt))
+            {
+                Console.WriteLine($"Error: Unsupported input extension '{inputExt}'.");
+                Console.WriteLine("Supported archive extensions: .nkx, .nkr, .nicnt, .nks");
+                return 1;
+            }
         }
 
         try
@@ -266,10 +272,18 @@ public class Program
 
     private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
     {
-        // 1. Support des extensions multiples (nkx, nkr, nicnt)
-        string ext = Path.GetExtension(outputNkxFilePath).ToLowerInvariant();
-        if (ext != ".nkx" && ext != ".nkr" && ext != ".nicnt")
+        // 1. Support des extensions multiples (nkx, nks, nkr, nicnt)
+        string ext = Path.GetExtension(outputNkxFilePath);
+
+        if (string.IsNullOrWhiteSpace(ext))
+        {
             outputNkxFilePath += ".nkx";
+        }
+        else if (!SupportedArchiveExtensions.Contains(ext))
+        {
+            Console.WriteLine($"Warning: Unsupported output extension '{ext}', defaulting to .nkx");
+            outputNkxFilePath = Path.ChangeExtension(outputNkxFilePath, ".nkx");
+        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputNkxFilePath) ?? string.Empty);
 
