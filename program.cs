@@ -105,7 +105,7 @@ public class Program
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
-    [STAThread]
+
     private static string NormalizeArchivePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -116,20 +116,22 @@ public class Program
                 .Replace('\\', Path.DirectorySeparatorChar);
     }
     [STAThread]
+
     public static int Main(string[] args)
     {
         int exitCode = 1;
 
-        // On crée explicitement un thread configuré en STA
+        // Le code est spécifiquement écrit pour Windows de toute façon à cause du P/Invoke
+#pragma warning disable CA1416
         Thread staThread = new Thread(() =>
         {
             exitCode = RunTool(args);
         });
 
-        // Force Windows à respecter le mode STA pour tout ce qui s'exécute dans ce thread
         staThread.SetApartmentState(ApartmentState.STA);
         staThread.Start();
-        staThread.Join(); // On attend que le thread termine son travail
+        staThread.Join();
+#pragma warning restore CA1416
 
         return exitCode;
     }
@@ -179,8 +181,25 @@ public class Program
             else if (operation == "unpack" && args.Length >= 3)
             {
                 string destinationFolder = Path.GetFullPath(args[2]);
-                string? fileListPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : null;
-                return DecompressArchive(path1, destinationFolder, fileListPath);
+                HashSet<string>? selectedFiles = null;
+
+                // On recrée la logique du HashSet pour respecter ta signature DecompressArchive
+                if (args.Length >= 4 && args[3].StartsWith("@"))
+                {
+                    string listFile = args[3].Substring(1);
+                    if (File.Exists(listFile))
+                    {
+                        var lines = File.ReadAllLines(listFile);
+                        selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var line in lines)
+                        {
+                            if (!string.IsNullOrWhiteSpace(line))
+                                selectedFiles.Add(line.Trim());
+                        }
+                    }
+                }
+                
+                return DecompressArchive(path1, destinationFolder, selectedFiles);
             }
             else if (operation == "pack" && args.Length >= 3)
             {
