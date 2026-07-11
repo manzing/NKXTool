@@ -3,6 +3,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
+using System.Threading;
 
 public class Program
 {
@@ -114,7 +115,26 @@ public class Program
                 .Replace('/', Path.DirectorySeparatorChar)
                 .Replace('\\', Path.DirectorySeparatorChar);
     }
+    [STAThread]
     public static int Main(string[] args)
+    {
+        int exitCode = 1;
+
+        // On crée explicitement un thread configuré en STA
+        Thread staThread = new Thread(() =>
+        {
+            exitCode = RunTool(args);
+        });
+
+        // Force Windows à respecter le mode STA pour tout ce qui s'exécute dans ce thread
+        staThread.SetApartmentState(ApartmentState.STA);
+        staThread.Start();
+        staThread.Join(); // On attend que le thread termine son travail
+
+        return exitCode;
+    }
+
+    private static int RunTool(string[] args)
     {
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
@@ -122,27 +142,20 @@ public class Program
         if (args.Length < 2)
         {
             Console.WriteLine("Usage:");
-            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt | file1 file2 ...]");
+            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt]");
             Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
             Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
-            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nks, .nicnt");
+            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
             return 1;
         }
-        
+
         string operation = args[0].ToLowerInvariant();
         string path1 = Path.GetFullPath(args[1]);
 
-        // Vérification de l'existence du fichier source pour les commandes de lecture
-        if (operation == "list" || operation == "unpack")
+        if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
         {
-            string inputExt = Path.GetExtension(path1);
-
-            if (!SupportedArchiveExtensions.Contains(inputExt))
-            {
-                Console.WriteLine($"Error: Unsupported input extension '{inputExt}'.");
-                Console.WriteLine("Supported archive extensions: .nkx, .nkr, .nicnt, .nks");
-                return 1;
-            }
+            Console.WriteLine($"Error: The source file '{path1}' does not exist.");
+            return 1;
         }
 
         try
@@ -165,52 +178,12 @@ public class Program
             }
             else if (operation == "unpack" && args.Length >= 3)
             {
-                HashSet<string>? selectedFiles = null;
-
-                if (args.Length >= 4)
-                {
-                    selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                    for (int i = 3; i < args.Length; i++)
-                    {
-                        string arg = args[i];
-
-                        if (arg.StartsWith("@"))
-                        {
-                            string listFile = Path.GetFullPath(arg.Substring(1));
-                            if (!File.Exists(listFile))
-                            {
-                                Console.WriteLine($"Error: File list '{listFile}' does not exist.");
-                                return 1;
-                            }
-
-                            foreach (string line in File.ReadAllLines(listFile))
-                            {
-                                string normalized = NormalizeArchivePath(line);
-                                if (!string.IsNullOrWhiteSpace(normalized))
-                                    selectedFiles.Add(normalized);
-                            }
-                        }
-                        else
-                        {
-                            string normalized = NormalizeArchivePath(arg);
-                            if (!string.IsNullOrWhiteSpace(normalized))
-                                selectedFiles.Add(normalized);
-                        }
-                    }
-
-                    if (selectedFiles.Count == 0)
-                    {
-                        Console.WriteLine("Error: No files selected for extraction.");
-                        return 1;
-                    }
-                }
-
-                return DecompressArchive(path1, Path.GetFullPath(args[2]), selectedFiles);
+                string destinationFolder = Path.GetFullPath(args[2]);
+                string? fileListPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : null;
+                return DecompressArchive(path1, destinationFolder, fileListPath);
             }
             else if (operation == "pack" && args.Length >= 3)
             {
-                // Pour filelist, on peut avoir besoin d'un chemin de base (rootPath)
                 string rootPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : "";
                 return CompressFolder(args[2], path1, rootPath);
             }
@@ -223,8 +196,8 @@ public class Program
         catch (Exception ex)
         {
             Console.WriteLine($"Critical Error: {ex.Message}");
+            return 1;
         }
-        return 1;
     }
 
     private static int ListArchive(string sourceNkxPath, string? outputListPath)
