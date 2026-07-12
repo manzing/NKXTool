@@ -228,7 +228,7 @@ public class Program
         }
     }
 
-    // --- NOUVELLE METHODE UPDATE ---
+    // --- METHODE UPDATE ---
     private static int UpdateUserDb()
     {
         string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
@@ -270,21 +270,32 @@ public class Program
 
                     if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
 
-                    string finalSnpid = snpid;
-                    if (Regex.IsMatch(snpid, @"^\d+$"))
+                    // Fonction locale pour écrire un bloc facilement
+                    void AppendEntry(string id)
                     {
-                        if (int.TryParse(snpid, out int snpidInt))
-                        {
-                            finalSnpid = snpidInt.ToString("X");
-                        }
+                        sb.AppendLine($"[{id}]");
+                        sb.AppendLine($"JDX={jdx}");
+                        sb.AppendLine($"HU={hu}");
+                        sb.AppendLine($"RegKey={regKey}");
+                        sb.AppendLine($"Company={company}");
+                        sb.AppendLine();
                     }
 
-                    sb.AppendLine($"[{finalSnpid}]");
-                    sb.AppendLine($"JDX={jdx}");
-                    sb.AppendLine($"HU={hu}");
-                    sb.AppendLine($"RegKey={regKey}");
-                    sb.AppendLine($"Company={company}");
-                    sb.AppendLine();
+                    // 1. On écrit TOUJOURS la valeur brute originale (ex: "8H3", "224", ou "540")
+                    AppendEntry(snpid);
+
+                    // 2. Si c'est purement numérique, on calcule l'Hexa sur 3 caractères (X3) et on l'ajoute
+                    if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
+                    {
+                        // Le "X3" force un format hexadécimal avec des zéros à gauche (ex: 224 -> "0E0")
+                        string hexSnpid = snpidInt.ToString("X3");
+                        
+                        // On ajoute le bloc seulement s'il est différent de l'original
+                        if (hexSnpid != snpid)
+                        {
+                            AppendEntry(hexSnpid);
+                        }
+                    }
                 }
             }
 
@@ -304,7 +315,6 @@ public class Program
         }
     }
 
-    // --- LE RESTE DE TES FONCTIONS RESTE INCHANGÉ ---
     private static int ListArchive(string sourceNkxPath, string? outputListPath)
     {
         // ... (code inchangé)
