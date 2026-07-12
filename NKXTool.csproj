@@ -10,7 +10,9 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
-
+  <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.*" />
+  </ItemGroup>
   <Target Name="CopyNkxPlugin" AfterTargets="Publish"> 
     <Copy SourceFiles="$(ProjectDir)inNKX.wcx64" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
   </Target>
