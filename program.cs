@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
 using System.Threading;
+using System.Xml;
+using System.Text.RegularExpressions;
 
 public class Program
 {
@@ -115,13 +117,12 @@ public class Program
                 .Replace('/', Path.DirectorySeparatorChar)
                 .Replace('\\', Path.DirectorySeparatorChar);
     }
+    
     [STAThread]
-
     public static int Main(string[] args)
     {
         int exitCode = 1;
 
-        // Le code est spécifiquement écrit pour Windows de toute façon à cause du P/Invoke
 #pragma warning disable CA1416
         Thread staThread = new Thread(() =>
         {
@@ -141,17 +142,26 @@ public class Program
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
-        if (args.Length < 2)
+        // Modification ici pour autoriser "update" qui ne prend qu'un seul argument (args.Length == 1)
+        if (args.Length == 0 || (args.Length < 2 && args[0].ToLowerInvariant() != "update"))
         {
             Console.WriteLine("Usage:");
             Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt]");
             Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
             Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
+            Console.WriteLine("  NkxTool update");
             Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
             return 1;
         }
 
         string operation = args[0].ToLowerInvariant();
+
+        // Routage direct pour la fonction update
+        if (operation == "update")
+        {
+            return UpdateUserDb();
+        }
+
         string path1 = Path.GetFullPath(args[1]);
 
         if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
@@ -183,7 +193,6 @@ public class Program
                 string destinationFolder = Path.GetFullPath(args[2]);
                 HashSet<string>? selectedFiles = null;
 
-                // On recrée la logique du HashSet pour respecter ta signature DecompressArchive
                 if (args.Length >= 4 && args[3].StartsWith("@"))
                 {
                     string listFile = args[3].Substring(1);
@@ -219,8 +228,96 @@ public class Program
         }
     }
 
+    // --- METHODE UPDATE ---
+    private static int UpdateUserDb()
+    {
+        string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
+        string xmlPath = Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
+
+        if (!File.Exists(xmlPath))
+        {
+            Console.WriteLine($"Error: NativeAccess.xml not found at {xmlPath}");
+            return 1;
+        }
+
+        string exeFolder = AppDomain.CurrentDomain.BaseDirectory;
+        string dbPath = Path.Combine(exeFolder, "nklibs_info.userdb");
+
+        Console.WriteLine($"Parsing XML file: {xmlPath}...");
+
+        StringBuilder sb = new StringBuilder();
+
+        try
+        {
+            XmlDocument xmlDoc = new XmlDocument();
+            xmlDoc.Load(xmlPath);
+
+            XmlNodeList? productNodes = xmlDoc.SelectNodes("//Product");
+            
+            if (productNodes != null)
+            {
+                foreach (XmlNode node in productNodes)
+                {
+                    string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
+                    XmlNode? psNode = node.SelectSingleNode("ProductSpecific");
+                    
+                    if (string.IsNullOrEmpty(snpid) || psNode == null) continue;
+
+                    string? jdx = psNode.SelectSingleNode("JDX")?.InnerText?.Trim();
+                    string? hu = psNode.SelectSingleNode("HU")?.InnerText?.Trim();
+                    string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
+                    string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
+
+                    if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
+
+                    // Fonction locale pour écrire un bloc facilement
+                    void AppendEntry(string id)
+                    {
+                        sb.AppendLine($"[{id}]");
+                        sb.AppendLine($"JDX={jdx}");
+                        sb.AppendLine($"HU={hu}");
+                        sb.AppendLine($"RegKey={regKey}");
+                        sb.AppendLine($"Company={company}");
+                        sb.AppendLine();
+                    }
+
+                    // 1. On écrit TOUJOURS la valeur brute originale (ex: "8H3", "224", ou "540")
+                    AppendEntry(snpid);
+
+                    // 2. Si c'est purement numérique, on calcule l'Hexa sur 3 caractères (X3) et on l'ajoute
+                    if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
+                    {
+                        // Le "X3" force un format hexadécimal avec des zéros à gauche (ex: 224 -> "0E0")
+                        string hexSnpid = snpidInt.ToString("X3");
+                        
+                        // On ajoute le bloc seulement s'il est différent de l'original
+                        if (hexSnpid != snpid)
+                        {
+                            AppendEntry(hexSnpid);
+                        }
+                    }
+                }
+            }
+
+            // Force ANSI (Windows-1252) encoding
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            Encoding ansiEncoding = Encoding.GetEncoding(1252);
+            
+            File.WriteAllText(dbPath, sb.ToString(), ansiEncoding);
+            
+            Console.WriteLine($"Success. Generated file: {dbPath}");
+            return E_SUCCESS;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Update Error: {ex.Message}");
+            return 1;
+        }
+    }
+
     private static int ListArchive(string sourceNkxPath, string? outputListPath)
     {
+        // ... (code inchangé)
         tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin { OpenMode = PK_OM_EXTRACT };
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
         openArcData.ArcName = pArcName;
@@ -269,7 +366,7 @@ public class Program
 
     private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
     {
-        // 1. Support des extensions multiples (nkx, nks, nkr, nicnt)
+        // ... (code inchangé)
         string ext = Path.GetExtension(outputNkxFilePath);
 
         if (string.IsNullOrWhiteSpace(ext))
@@ -309,7 +406,6 @@ public class Program
 
         if (filesToPack.Count == 0) return 1;
 
-        // 2. Logique de découpage automatique (Limite à ~1.95 Go)
         long maxSize = 2090000000L; 
         List<List<string>> batches = new List<List<string>>();
         List<string> currentBatch = new List<string>();
@@ -333,14 +429,12 @@ public class Program
         }
         if (currentBatch.Count > 0) batches.Add(currentBatch);
 
-        // 3. Compression par lot
         int overallResult = E_SUCCESS;
 
         for (int i = 0; i < batches.Count; i++)
         {
             string batchOutputPath = outputNkxFilePath;
             
-            // Si on a plusieurs lots, on ajoute le suffixe _00, _01...
             if (batches.Count > 1)
             {
                 string dir = Path.GetDirectoryName(outputNkxFilePath) ?? "";
@@ -387,8 +481,10 @@ public class Program
         }
         return overallResult;
     }
+
     private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles = null)
     {
+        // ... (code inchangé)
         Directory.CreateDirectory(destinationDirPath);
 
         string destPathW = destinationDirPath;
