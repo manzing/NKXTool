@@ -8,6 +8,7 @@ NkxTool is a robust, 64-bit command-line utility for managing Native Instruments
 - **Smart Packing (Auto-Split):** Automatically handles the strict 1.95 GB (`2,090,000,000` bytes) size limit of the NKX format. If a source folder exceeds this limit, NkxTool automatically splits the output into `_00.nkx`, `_01.nkx`, etc.
 - **Filelist Support:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), perfect for scripted audio conversions or selective repacking.
 - **COM STA Threading:** Fully initializes Windows COM components natively, ensuring the plugin can properly search for decryption keys and generate `.userdb` files.
+- **Update function for internal database:** synced with system NativeAccess.xml with exotic / old library unique support.
 - **Modern Architecture:** Built with C# on .NET 10 (win-x64), completely standalone.
 
 ## 📋 Requirements
@@ -49,6 +50,14 @@ NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
 # Example B: Pack using a file list (requires '@')
 # If the text file is located alongside the source samples, rootPath is optional.
 NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
+```
+### 2. Udate
+Update internal inNKX database file nklibs_info.userdb by syncing with system's NativeAccess.xml.
+```cmd
+NkxTool update
+
+# Example:
+NkxTool update
 ```
 
 ## 🏗️ Compilation
