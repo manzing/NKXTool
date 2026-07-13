@@ -142,7 +142,7 @@ public class Program
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
-        // Transformation des arguments en liste pour extraire facilement le flag -y
+        // Analyse de l'argument -y pour l'écrasement
         List<string> argsList = new List<string>(args);
         bool overwrite = argsList.Remove("-y") || argsList.Remove("-Y");
 
@@ -154,11 +154,12 @@ public class Program
 
         string operation = argsList[0].ToLowerInvariant();
 
-        // Commande update
+        // Commande update sans arguments supplémentaires
         if (operation == "update")
         {
             string defaultXmlPath = @"C:\Program Files\Common Files\Native Instruments\Service Center";
-            return UpdateUserDb(defaultXmlPath);
+            string userDbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
+            return UpdateUserDb(defaultXmlPath, userDbPath);
         }
 
         if (argsList.Count < 2)
@@ -213,6 +214,7 @@ public class Program
                     }
                 }
                 
+                // Appel avec le flag overwrite
                 return DecompressArchive(path1, destinationFolder, selectedFiles, overwrite);
             }
             else if (operation == "pack" && argsList.Count >= 3)
