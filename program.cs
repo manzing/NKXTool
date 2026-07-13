@@ -140,7 +140,7 @@ public class Program
     private static int RunTool(string[] args)
     {
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        Directory.SetCurrentDirectory(exeDirectory);
+        //Directory.SetCurrentDirectory(exeDirectory);
 
         List<string> argsList = new List<string>(args);
         
@@ -264,6 +264,7 @@ public class Program
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
         Console.WriteLine();
         Console.WriteLine("Examples:");
+        Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
         Console.WriteLine("  NkxTool update");
         Console.WriteLine("  NkxTool update -f \"C:\\Program Files\\Common Files\\Native Instruments\\Service Center\\NativeAccess.xml\"");
         Console.WriteLine();
