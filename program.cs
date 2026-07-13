@@ -142,27 +142,33 @@ public class Program
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
-        // Modification ici pour autoriser "update" qui ne prend qu'un seul argument (args.Length == 1)
-        if (args.Length == 0 || (args.Length < 2 && args[0].ToLowerInvariant() != "update"))
+        // Analyse de l'argument -y pour l'écrasement
+        List<string> argsList = new List<string>(args);
+        bool overwrite = argsList.Remove("-y") || argsList.Remove("-Y");
+
+        if (argsList.Count < 1)
         {
-            Console.WriteLine("Usage:");
-            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt]");
-            Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
-            Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
-            Console.WriteLine("  NkxTool update");
-            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
+            ShowUsage();
             return 1;
         }
 
-        string operation = args[0].ToLowerInvariant();
+        string operation = argsList[0].ToLowerInvariant();
 
-        // Routage direct pour la fonction update
+        // Commande update sans arguments supplémentaires
         if (operation == "update")
         {
-            return UpdateUserDb();
+            string defaultXmlPath = @"C:\Program Files\Common Files\Native Instruments\Service Center";
+            string userDbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
+            return UpdateUserDb(defaultXmlPath, userDbPath);
         }
 
-        string path1 = Path.GetFullPath(args[1]);
+        if (argsList.Count < 2)
+        {
+            ShowUsage();
+            return 1;
+        }
+
+        string path1 = Path.GetFullPath(argsList[1]);
 
         if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
         {
@@ -185,17 +191,17 @@ public class Program
         {
             if (operation == "list")
             {
-                string? outList = args.Length >= 3 ? Path.GetFullPath(args[2]) : null;
+                string? outList = argsList.Count >= 3 ? Path.GetFullPath(argsList[2]) : null;
                 return ListArchive(path1, outList);
             }
-            else if (operation == "unpack" && args.Length >= 3)
+            else if (operation == "unpack" && argsList.Count >= 3)
             {
-                string destinationFolder = Path.GetFullPath(args[2]);
+                string destinationFolder = Path.GetFullPath(argsList[2]);
                 HashSet<string>? selectedFiles = null;
 
-                if (args.Length >= 4 && args[3].StartsWith("@"))
+                if (argsList.Count >= 4 && argsList[3].StartsWith("@"))
                 {
-                    string listFile = args[3].Substring(1);
+                    string listFile = argsList[3].Substring(1);
                     if (File.Exists(listFile))
                     {
                         var lines = File.ReadAllLines(listFile);
@@ -208,16 +214,18 @@ public class Program
                     }
                 }
                 
-                return DecompressArchive(path1, destinationFolder, selectedFiles);
+                // Appel avec le flag overwrite
+                return DecompressArchive(path1, destinationFolder, selectedFiles, overwrite);
             }
-            else if (operation == "pack" && args.Length >= 3)
+            else if (operation == "pack" && argsList.Count >= 3)
             {
-                string rootPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : "";
-                return CompressFolder(args[2], path1, rootPath);
+                string rootPath = argsList.Count >= 4 ? Path.GetFullPath(argsList[3]) : "";
+                return CompressFolder(argsList[2], path1, rootPath);
             }
             else
             {
                 Console.WriteLine("Invalid operation or missing arguments.");
+                ShowUsage();
                 return 1;
             }
         }
@@ -226,6 +234,18 @@ public class Program
             Console.WriteLine($"Critical Error: {ex.Message}");
             return 1;
         }
+    }
+
+    private static void ShowUsage()
+    {
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt] [-y]");
+        Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
+        Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
+        Console.WriteLine("  NkxTool update");
+        Console.WriteLine("\nOptions:");
+        Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
+        Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
     }
 
     // --- METHODE UPDATE ---
@@ -482,11 +502,10 @@ public class Program
         return overallResult;
     }
 
-    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles = null)
+    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles, bool overwrite)
     {
-        // ... (code inchangé)
         Directory.CreateDirectory(destinationDirPath);
-
+        
         string destPathW = destinationDirPath;
         if (!destPathW.EndsWith(Path.DirectorySeparatorChar.ToString()))
             destPathW += Path.DirectorySeparatorChar;
@@ -506,42 +525,44 @@ public class Program
             try { SetChangeVolProcW(hArc, _changeVolProc); } catch { }
 
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
-
-            int archiveFileCount = 0;
-            int matchedCount = 0;
             int extractedCount = 0;
+            int matchedCount = 0;
+            int archiveFileCount = 0;
             HashSet<string> foundFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-                bool isDirectory = (headerData.hdFileAttr & 0x10) != 0;
-
-                if (isDirectory)
+                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
+                
+                if ((headerData.hdFileAttr & 0x10) != 0)
                 {
+                    // C'est un dossier, on l'ignore (le plugin avance le curseur)
                     ProcessFileW(hArc, PK_SKIP, null, null);
                     continue;
                 }
 
                 archiveFileCount++;
+                foundFiles.Add(relativePath);
 
-                string normalizedRelativePath = NormalizeArchivePath(relativePath);
-                bool isSelected = selectedFiles == null || selectedFiles.Contains(normalizedRelativePath);
-
-                if (!isSelected)
+                if (selectedFiles != null && !selectedFiles.Contains(relativePath))
                 {
                     ProcessFileW(hArc, PK_SKIP, null, null);
                     continue;
                 }
 
                 matchedCount++;
-                foundFiles.Add(normalizedRelativePath);
-
-                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
-                string? fullDestDir = Path.GetDirectoryName(fullDestPath);
-
+                string fullDestDir = Path.GetDirectoryName(fullDestPath) ?? "";
                 if (!string.IsNullOrEmpty(fullDestDir))
                     Directory.CreateDirectory(fullDestDir);
+
+                // --- GESTION DE LA COLLISION ---
+                if (!overwrite && File.Exists(fullDestPath))
+                {
+                    Console.WriteLine($"Skipping (already exists): {relativePath}");
+                    ProcessFileW(hArc, PK_SKIP, null, null);
+                    continue;
+                }
 
                 Console.WriteLine($"Unpacking: {relativePath}");
 
