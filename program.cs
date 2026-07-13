@@ -159,12 +159,24 @@ public class Program
         if (operation == "update")
         {
             string? customXmlPath = null;
-            
-            // Recherche du flag -f suivi d'un chemin
+
             int fIndex = argsList.IndexOf("-f");
-            if (fIndex >= 0 && fIndex + 1 < argsList.Count)
+            if (fIndex >= 0)
             {
-                customXmlPath = Path.GetFullPath(argsList[fIndex + 1]);
+                if (fIndex + 1 >= argsList.Count)
+                {
+                    Console.WriteLine("Error: Missing file path after -f");
+                    return 1;
+                }
+
+                string rawPath = argsList[fIndex + 1].Trim();
+                if (string.IsNullOrWhiteSpace(rawPath))
+                {
+                    Console.WriteLine("Error: Empty file path after -f");
+                    return 1;
+                }
+
+                customXmlPath = Path.GetFullPath(rawPath);
             }
 
             return UpdateUserDb(customXmlPath);
@@ -250,10 +262,16 @@ public class Program
         Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
-        Console.WriteLine("\nOptions:");
+        Console.WriteLine();
+        Console.WriteLine("Examples:");
+        Console.WriteLine("  NkxTool update");
+        Console.WriteLine("  NkxTool update -f \"C:\\Program Files\\Common Files\\Native Instruments\\Service Center\\NativeAccess.xml\"");
+        Console.WriteLine();
+        Console.WriteLine("Options:");
         Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
         Console.WriteLine("  -f : Specify a custom path to NativeAccess.xml (update only)");
-        Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
+        Console.WriteLine();
+        Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks");
     }
 
     // --- METHODE UPDATE ---
