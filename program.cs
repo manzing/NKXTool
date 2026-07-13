@@ -142,27 +142,41 @@ public class Program
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
         Directory.SetCurrentDirectory(exeDirectory);
 
-        // Modification ici pour autoriser "update" qui ne prend qu'un seul argument (args.Length == 1)
-        if (args.Length == 0 || (args.Length < 2 && args[0].ToLowerInvariant() != "update"))
+        List<string> argsList = new List<string>(args);
+        
+        // Extraction du flag -y (pour l'écrasement dans unpack)
+        bool overwrite = argsList.Remove("-y") || argsList.Remove("-Y");
+
+        if (argsList.Count < 1)
         {
-            Console.WriteLine("Usage:");
-            Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt]");
-            Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
-            Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
-            Console.WriteLine("  NkxTool update");
-            Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
+            ShowUsage();
             return 1;
         }
 
-        string operation = args[0].ToLowerInvariant();
+        string operation = argsList[0].ToLowerInvariant();
 
-        // Routage direct pour la fonction update
+        // Commande update avec option -f
         if (operation == "update")
         {
-            return UpdateUserDb();
+            string? customXmlPath = null;
+            
+            // Recherche du flag -f suivi d'un chemin
+            int fIndex = argsList.IndexOf("-f");
+            if (fIndex >= 0 && fIndex + 1 < argsList.Count)
+            {
+                customXmlPath = Path.GetFullPath(argsList[fIndex + 1]);
+            }
+
+            return UpdateUserDb(customXmlPath);
         }
 
-        string path1 = Path.GetFullPath(args[1]);
+        if (argsList.Count < 2)
+        {
+            ShowUsage();
+            return 1;
+        }
+
+        string path1 = Path.GetFullPath(argsList[1]);
 
         if ((operation == "list" || operation == "unpack") && !File.Exists(path1))
         {
@@ -185,17 +199,17 @@ public class Program
         {
             if (operation == "list")
             {
-                string? outList = args.Length >= 3 ? Path.GetFullPath(args[2]) : null;
+                string? outList = argsList.Count >= 3 ? Path.GetFullPath(argsList[2]) : null;
                 return ListArchive(path1, outList);
             }
-            else if (operation == "unpack" && args.Length >= 3)
+            else if (operation == "unpack" && argsList.Count >= 3)
             {
-                string destinationFolder = Path.GetFullPath(args[2]);
+                string destinationFolder = Path.GetFullPath(argsList[2]);
                 HashSet<string>? selectedFiles = null;
 
-                if (args.Length >= 4 && args[3].StartsWith("@"))
+                if (argsList.Count >= 4 && argsList[3].StartsWith("@"))
                 {
-                    string listFile = args[3].Substring(1);
+                    string listFile = argsList[3].Substring(1);
                     if (File.Exists(listFile))
                     {
                         var lines = File.ReadAllLines(listFile);
@@ -208,16 +222,17 @@ public class Program
                     }
                 }
                 
-                return DecompressArchive(path1, destinationFolder, selectedFiles);
+                return DecompressArchive(path1, destinationFolder, selectedFiles, overwrite);
             }
-            else if (operation == "pack" && args.Length >= 3)
+            else if (operation == "pack" && argsList.Count >= 3)
             {
-                string rootPath = args.Length >= 4 ? Path.GetFullPath(args[3]) : "";
-                return CompressFolder(args[2], path1, rootPath);
+                string rootPath = argsList.Count >= 4 ? Path.GetFullPath(argsList[3]) : "";
+                return CompressFolder(argsList[2], path1, rootPath);
             }
             else
             {
                 Console.WriteLine("Invalid operation or missing arguments.");
+                ShowUsage();
                 return 1;
             }
         }
@@ -228,89 +243,132 @@ public class Program
         }
     }
 
-    // --- METHODE UPDATE ---
-    private static int UpdateUserDb()
+
+    private static void ShowUsage()
     {
-        string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
-        string xmlPath = Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt] [-y]");
+        Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
+        Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
+        Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
+        Console.WriteLine("\nOptions:");
+        Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
+        Console.WriteLine("  -f : Specify a custom path to NativeAccess.xml (update only)");
+        Console.WriteLine("\nSupported extensions: .nkx, .nkr, .nicnt, .nks");
+    }
+
+    // --- METHODE UPDATE ---
+    private static int UpdateUserDb(string? customXmlPath = null)
+    {
+        Console.WriteLine("Updating nklibs_info.userdb from NativeAccess.xml...");
+
+        string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
+        string userDbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
+
+        string xmlPath;
+        if (!string.IsNullOrEmpty(customXmlPath))
+        {
+            xmlPath = customXmlPath;
+        }
+        else
+        {
+            string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
+            xmlPath = Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
+        }
 
         if (!File.Exists(xmlPath))
         {
-            Console.WriteLine($"Error: NativeAccess.xml not found at {xmlPath}");
+            Console.WriteLine($"Error: Could not find '{xmlPath}'");
             return 1;
         }
 
-        string exeFolder = AppDomain.CurrentDomain.BaseDirectory;
-        string dbPath = Path.Combine(exeFolder, "nklibs_info.userdb");
+        Dictionary<string, string> dbEntries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        Console.WriteLine($"Parsing XML file: {xmlPath}...");
+        // Load existing database if it exists to preserve current entries
+        if (File.Exists(userDbPath))
+        {
+            try
+            {
+                foreach (string line in File.ReadAllLines(userDbPath))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    
+                    var match = Regex.Match(line, @"^([0-9A-Fa-f]{3})\s+(.+)$");
+                    if (match.Success)
+                    {
+                        dbEntries[match.Groups[1].Value.ToUpper()] = match.Groups[2].Value.Trim();
+                    }
+                }
+                Console.WriteLine($"Loaded {dbEntries.Count} existing entries from nklibs_info.userdb");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to read existing userdb: {ex.Message}");
+            }
+        }
 
-        StringBuilder sb = new StringBuilder();
+        int addedCount = 0;
+        int updatedCount = 0;
 
         try
         {
-            XmlDocument xmlDoc = new XmlDocument();
-            xmlDoc.Load(xmlPath);
+            XmlDocument doc = new XmlDocument();
+            doc.Load(xmlPath);
 
-            XmlNodeList? productNodes = xmlDoc.SelectNodes("//Product");
-            
+            XmlNodeList? productNodes = doc.SelectNodes("//Product");
             if (productNodes != null)
             {
-                foreach (XmlNode node in productNodes)
+                foreach (XmlNode product in productNodes)
                 {
-                    string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
-                    XmlNode? psNode = node.SelectSingleNode("ProductSpecific");
-                    
-                    if (string.IsNullOrEmpty(snpid) || psNode == null) continue;
+                    XmlNode? jidNode = product.SelectSingleNode("JDX");
+                    XmlNode? nameNode = product.SelectSingleNode("Name");
 
-                    string? jdx = psNode.SelectSingleNode("JDX")?.InnerText?.Trim();
-                    string? hu = psNode.SelectSingleNode("HU")?.InnerText?.Trim();
-                    string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
-                    string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
-
-                    if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
-
-                    // Fonction locale pour écrire un bloc facilement
-                    void AppendEntry(string id)
+                    if (jidNode != null && nameNode != null && !string.IsNullOrWhiteSpace(jidNode.InnerText))
                     {
-                        sb.AppendLine($"[{id}]");
-                        sb.AppendLine($"JDX={jdx}");
-                        sb.AppendLine($"HU={hu}");
-                        sb.AppendLine($"RegKey={regKey}");
-                        sb.AppendLine($"Company={company}");
-                        sb.AppendLine();
-                    }
+                        string jid = jidNode.InnerText.Trim().ToUpper();
+                        string name = nameNode.InnerText.Trim();
 
-                    // 1. On écrit TOUJOURS la valeur brute originale (ex: "8H3", "224", ou "540")
-                    AppendEntry(snpid);
-
-                    // 2. Si c'est purement numérique, on calcule l'Hexa sur 3 caractères (X3) et on l'ajoute
-                    if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
-                    {
-                        // Le "X3" force un format hexadécimal avec des zéros à gauche (ex: 224 -> "0E0")
-                        string hexSnpid = snpidInt.ToString("X3");
-                        
-                        // On ajoute le bloc seulement s'il est différent de l'original
-                        if (hexSnpid != snpid)
+                        if (dbEntries.TryGetValue(jid, out string? existingName))
                         {
-                            AppendEntry(hexSnpid);
+                            if (existingName != name)
+                            {
+                                dbEntries[jid] = name;
+                                updatedCount++;
+                            }
+                        }
+                        else
+                        {
+                            dbEntries[jid] = name;
+                            addedCount++;
                         }
                     }
                 }
             }
 
-            // Force ANSI (Windows-1252) encoding
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            Encoding ansiEncoding = Encoding.GetEncoding(1252);
-            
-            File.WriteAllText(dbPath, sb.ToString(), ansiEncoding);
-            
-            Console.WriteLine($"Success. Generated file: {dbPath}");
-            return E_SUCCESS;
+            if (addedCount > 0 || updatedCount > 0)
+            {
+                var sortedEntries = new List<string>();
+                foreach (var kvp in dbEntries)
+                {
+                    sortedEntries.Add($"{kvp.Key} {kvp.Value}");
+                }
+                sortedEntries.Sort();
+
+                File.WriteAllLines(userDbPath, sortedEntries);
+                Console.WriteLine($"Successfully updated {userDbPath}");
+                Console.WriteLine($"Added {addedCount} new entries, updated {updatedCount} entries.");
+                Console.WriteLine($"Total database size: {dbEntries.Count} entries.");
+            }
+            else
+            {
+                Console.WriteLine("No new or updated entries found. Database is already up to date.");
+            }
+
+            return 0;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Update Error: {ex.Message}");
+            Console.WriteLine($"Error updating database: {ex.Message}");
             return 1;
         }
     }
@@ -482,11 +540,10 @@ public class Program
         return overallResult;
     }
 
-    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles = null)
+    private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles, bool overwrite)
     {
-        // ... (code inchangé)
         Directory.CreateDirectory(destinationDirPath);
-
+        
         string destPathW = destinationDirPath;
         if (!destPathW.EndsWith(Path.DirectorySeparatorChar.ToString()))
             destPathW += Path.DirectorySeparatorChar;
@@ -506,42 +563,44 @@ public class Program
             try { SetChangeVolProcW(hArc, _changeVolProc); } catch { }
 
             tHeaderDataExW_WCXPlugin headerData = new tHeaderDataExW_WCXPlugin();
-
-            int archiveFileCount = 0;
-            int matchedCount = 0;
             int extractedCount = 0;
+            int matchedCount = 0;
+            int archiveFileCount = 0;
             HashSet<string> foundFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-                bool isDirectory = (headerData.hdFileAttr & 0x10) != 0;
-
-                if (isDirectory)
+                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
+                
+                if ((headerData.hdFileAttr & 0x10) != 0)
                 {
+                    // C'est un dossier, on l'ignore (le plugin avance le curseur)
                     ProcessFileW(hArc, PK_SKIP, null, null);
                     continue;
                 }
 
                 archiveFileCount++;
+                foundFiles.Add(relativePath);
 
-                string normalizedRelativePath = NormalizeArchivePath(relativePath);
-                bool isSelected = selectedFiles == null || selectedFiles.Contains(normalizedRelativePath);
-
-                if (!isSelected)
+                if (selectedFiles != null && !selectedFiles.Contains(relativePath))
                 {
                     ProcessFileW(hArc, PK_SKIP, null, null);
                     continue;
                 }
 
                 matchedCount++;
-                foundFiles.Add(normalizedRelativePath);
-
-                string fullDestPath = Path.Combine(destinationDirPath, relativePath);
-                string? fullDestDir = Path.GetDirectoryName(fullDestPath);
-
+                string fullDestDir = Path.GetDirectoryName(fullDestPath) ?? "";
                 if (!string.IsNullOrEmpty(fullDestDir))
                     Directory.CreateDirectory(fullDestDir);
+
+                // --- GESTION DE LA COLLISION ---
+                if (!overwrite && File.Exists(fullDestPath))
+                {
+                    Console.WriteLine($"Skipping (already exists): {relativePath}");
+                    ProcessFileW(hArc, PK_SKIP, null, null);
+                    continue;
+                }
 
                 Console.WriteLine($"Unpacking: {relativePath}");
 
