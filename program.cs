@@ -338,7 +338,8 @@ public class Program
             {
                 foreach (XmlNode product in productNodes)
                 {
-                    XmlNode? jidNode = product.SelectSingleNode("JDX");
+                    XmlNode? jidNode = product.SelectSingleNode("JDX")
+                                    ?? product.SelectSingleNode("ProductSpecific/JDX");
                     XmlNode? nameNode = product.SelectSingleNode("Name");
 
                     if (jidNode != null && nameNode != null && !string.IsNullOrWhiteSpace(jidNode.InnerText))
