@@ -281,7 +281,7 @@ public class Program
         Console.WriteLine("Updating nklibs_info.userdb from NativeAccess.xml...");
 
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        string userDbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
+        string dbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
 
         string xmlPath;
         if (!string.IsNullOrEmpty(customXmlPath))
@@ -300,148 +300,71 @@ public class Program
             return 1;
         }
 
-        // Clé = SNPID, Valeur = (JDX, HU, RegKey, Company)
-        Dictionary<string, (string Jdx, string Hu, string RegKey, string Company)> dbEntries =
-            new Dictionary<string, (string Jdx, string Hu, string RegKey, string Company)>(StringComparer.OrdinalIgnoreCase);
-
-        // Recharge le fichier existant au format [SNPID] / JDX= / HU= / RegKey= / Company=
-        if (File.Exists(userDbPath))
-        {
-            try
-            {
-                string? currentSnpid = null;
-                string jdx = "", hu = "", regKey = "", company = "";
-
-                foreach (string rawLine in File.ReadAllLines(userDbPath))
-                {
-                    string line = rawLine.Trim();
-                    if (line.Length == 0) continue;
-
-                    var sectionMatch = Regex.Match(line, @"^\[(.+)\]$");
-                    if (sectionMatch.Success)
-                    {
-                        // On sauvegarde la section précédente avant d'en commencer une nouvelle
-                        if (currentSnpid != null && !string.IsNullOrEmpty(jdx))
-                        {
-                            dbEntries[currentSnpid] = (jdx, hu, regKey, company);
-                        }
-                        currentSnpid = sectionMatch.Groups[1].Value.Trim();
-                        jdx = ""; hu = ""; regKey = ""; company = "";
-                        continue;
-                    }
-
-                    var kv = Regex.Match(line, @"^(JDX|HU|RegKey|Company)\s*=\s*(.*)$", RegexOptions.IgnoreCase);
-                    if (kv.Success && currentSnpid != null)
-                    {
-                        string key = kv.Groups[1].Value.ToUpperInvariant();
-                        string value = kv.Groups[2].Value.Trim();
-                        switch (key)
-                        {
-                            case "JDX": jdx = value; break;
-                            case "HU": hu = value; break;
-                            case "REGKEY": regKey = value; break;
-                            case "COMPANY": company = value; break;
-                        }
-                    }
-                }
-                // Ne pas oublier la dernière section du fichier
-                if (currentSnpid != null && !string.IsNullOrEmpty(jdx))
-                {
-                    dbEntries[currentSnpid] = (jdx, hu, regKey, company);
-                }
-
-                Console.WriteLine($"Loaded {dbEntries.Count} existing entries from nklibs_info.userdb");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Warning: Failed to read existing userdb: {ex.Message}");
-            }
-        }
-
-        int addedCount = 0;
-        int updatedCount = 0;
+        StringBuilder sb = new StringBuilder();
+        int entryCount = 0;
+        int duplicatedHexCount = 0;
 
         try
         {
-            XmlDocument doc = new XmlDocument();
-            doc.Load(xmlPath);
+            XmlDocument xmlDoc = new XmlDocument();
+            xmlDoc.Load(xmlPath);
+            XmlNodeList? productNodes = xmlDoc.SelectNodes("//Product");
 
-            XmlNodeList? productNodes = doc.SelectNodes("//Product");
             if (productNodes != null)
             {
-                foreach (XmlNode product in productNodes)
+                foreach (XmlNode node in productNodes)
                 {
-                    XmlNode? jidNode = product.SelectSingleNode("JDX")
-                                    ?? product.SelectSingleNode("ProductSpecific/JDX");
-                    XmlNode? huNode = product.SelectSingleNode("HU")
-                                    ?? product.SelectSingleNode("ProductSpecific/HU");
-                    XmlNode? snpidNode = product.SelectSingleNode("SNPID");
-                    XmlNode? regKeyNode = product.SelectSingleNode("RegKey");
-                    XmlNode? nameNode = product.SelectSingleNode("Name");
-                    XmlNode? companyNode = product.SelectSingleNode("Company");
+                    string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
+                    XmlNode? psNode = node.SelectSingleNode("ProductSpecific");
 
-                    if (jidNode == null || snpidNode == null || string.IsNullOrWhiteSpace(jidNode.InnerText))
+                    if (string.IsNullOrEmpty(snpid) || psNode == null) continue;
+
+                    string? jdx = psNode.SelectSingleNode("JDX")?.InnerText?.Trim();
+                    string? hu = psNode.SelectSingleNode("HU")?.InnerText?.Trim();
+                    string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
+                    string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
+
+                    if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
+
+                    void AppendEntry(string id)
                     {
-                        continue; // pas de clé exploitable pour ce produit
+                        sb.AppendLine($"[{id}]");
+                        sb.AppendLine($"JDX={jdx}");
+                        sb.AppendLine($"HU={hu}");
+                        sb.AppendLine($"RegKey={regKey}");
+                        sb.AppendLine($"Company={company}");
+                        sb.AppendLine();
+                        entryCount++;
                     }
 
-                    string snpid = snpidNode.InnerText.Trim();
-                    string jdx = jidNode.InnerText.Trim().ToUpperInvariant();
-                    string hu = huNode != null ? huNode.InnerText.Trim().ToUpperInvariant() : "";
-                    string regKey = regKeyNode != null ? regKeyNode.InnerText.Trim()
-                                : (nameNode != null ? nameNode.InnerText.Trim() : snpid);
-                    string company = companyNode != null ? companyNode.InnerText.Trim() : "";
+                    // 1. On écrit TOUJOURS la valeur brute originale (ex: "8H3", "224", "S65"...)
+                    AppendEntry(snpid);
 
-                    if (dbEntries.TryGetValue(snpid, out var existing))
+                    // 2. Si le SNPID est purement numérique, on calcule aussi sa forme
+                    //    hexadécimale sur 3 caractères (X3) et on l'ajoute si elle diffère
+                    //    de l'original -> couvre les deux interprétations possibles côté inNKX.
+                    if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
                     {
-                        if (existing.Jdx != jdx || existing.Hu != hu || existing.RegKey != regKey || existing.Company != company)
+                        string hexSnpid = snpidInt.ToString("X3");
+
+                        if (hexSnpid != snpid)
                         {
-                            dbEntries[snpid] = (jdx, hu, regKey, company);
-                            updatedCount++;
+                            AppendEntry(hexSnpid);
+                            duplicatedHexCount++;
                         }
                     }
-                    else
-                    {
-                        dbEntries[snpid] = (jdx, hu, regKey, company);
-                        addedCount++;
-                    }
                 }
             }
 
-            if (addedCount > 0 || updatedCount > 0)
-            {
-                var sortedKeys = new List<string>(dbEntries.Keys);
-                sortedKeys.Sort(StringComparer.OrdinalIgnoreCase);
+            // Encodage ANSI (Windows-1252), requis par inNKX.wcx64 (plugin Delphi/C ancien).
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            Encoding ansiEncoding = Encoding.GetEncoding(1252);
 
-                var lines = new List<string>();
-                foreach (var snpid in sortedKeys)
-                {
-                    var e = dbEntries[snpid];
-                    lines.Add($"[{snpid}]");
-                    lines.Add($"JDX={e.Jdx}");
-                    if (!string.IsNullOrEmpty(e.Hu))
-                    {
-                        lines.Add($"HU={e.Hu}");
-                    }
-                    lines.Add($"RegKey={e.RegKey}");
-                    if (!string.IsNullOrEmpty(e.Company))
-                    {
-                        lines.Add($"Company={e.Company}");
-                    }
-                    lines.Add(""); // ligne vide entre sections, comme le format original
-                }
+            File.WriteAllText(dbPath, sb.ToString(), ansiEncoding);
 
-                File.WriteAllLines(userDbPath, lines);
-                Console.WriteLine($"Successfully updated {userDbPath}");
-                Console.WriteLine($"Added {addedCount} new entries, updated {updatedCount} entries.");
-                Console.WriteLine($"Total database size: {dbEntries.Count} entries.");
-            }
-            else
-            {
-                Console.WriteLine("No new or updated entries found. Database is already up to date.");
-            }
-
-            return 0;
+            Console.WriteLine($"Success. Generated file: {dbPath}");
+            Console.WriteLine($"Total entries written: {entryCount} (including {duplicatedHexCount} decimal/hex duplicates).");
+            return E_SUCCESS;
         }
         catch (Exception ex)
         {
