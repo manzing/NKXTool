@@ -123,16 +123,16 @@ public class Program
     {
         int exitCode = 1;
 
-#pragma warning disable CA1416
-        Thread staThread = new Thread(() =>
-        {
-            exitCode = RunTool(args);
-        });
+    #pragma warning disable CA1416
+            Thread staThread = new Thread(() =>
+            {
+                exitCode = RunTool(args);
+            });
 
-        staThread.SetApartmentState(ApartmentState.STA);
-        staThread.Start();
-        staThread.Join();
-#pragma warning restore CA1416
+            staThread.SetApartmentState(ApartmentState.STA);
+            staThread.Start();
+            staThread.Join();
+    #pragma warning restore CA1416
 
         return exitCode;
     }
@@ -300,23 +300,56 @@ public class Program
             return 1;
         }
 
-        Dictionary<string, string> dbEntries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Clé = SNPID, Valeur = (JDX, HU, RegKey, Company)
+        Dictionary<string, (string Jdx, string Hu, string RegKey, string Company)> dbEntries =
+            new Dictionary<string, (string Jdx, string Hu, string RegKey, string Company)>(StringComparer.OrdinalIgnoreCase);
 
-        // Load existing database if it exists to preserve current entries
+        // Recharge le fichier existant au format [SNPID] / JDX= / HU= / RegKey= / Company=
         if (File.Exists(userDbPath))
         {
             try
             {
-                foreach (string line in File.ReadAllLines(userDbPath))
+                string? currentSnpid = null;
+                string jdx = "", hu = "", regKey = "", company = "";
+
+                foreach (string rawLine in File.ReadAllLines(userDbPath))
                 {
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    
-                    var match = Regex.Match(line, @"^([0-9A-Fa-f]{3})\s+(.+)$");
-                    if (match.Success)
+                    string line = rawLine.Trim();
+                    if (line.Length == 0) continue;
+
+                    var sectionMatch = Regex.Match(line, @"^\[(.+)\]$");
+                    if (sectionMatch.Success)
                     {
-                        dbEntries[match.Groups[1].Value.ToUpper()] = match.Groups[2].Value.Trim();
+                        // On sauvegarde la section précédente avant d'en commencer une nouvelle
+                        if (currentSnpid != null && !string.IsNullOrEmpty(jdx))
+                        {
+                            dbEntries[currentSnpid] = (jdx, hu, regKey, company);
+                        }
+                        currentSnpid = sectionMatch.Groups[1].Value.Trim();
+                        jdx = ""; hu = ""; regKey = ""; company = "";
+                        continue;
+                    }
+
+                    var kv = Regex.Match(line, @"^(JDX|HU|RegKey|Company)\s*=\s*(.*)$", RegexOptions.IgnoreCase);
+                    if (kv.Success && currentSnpid != null)
+                    {
+                        string key = kv.Groups[1].Value.ToUpperInvariant();
+                        string value = kv.Groups[2].Value.Trim();
+                        switch (key)
+                        {
+                            case "JDX": jdx = value; break;
+                            case "HU": hu = value; break;
+                            case "REGKEY": regKey = value; break;
+                            case "COMPANY": company = value; break;
+                        }
                     }
                 }
+                // Ne pas oublier la dernière section du fichier
+                if (currentSnpid != null && !string.IsNullOrEmpty(jdx))
+                {
+                    dbEntries[currentSnpid] = (jdx, hu, regKey, company);
+                }
+
                 Console.WriteLine($"Loaded {dbEntries.Count} existing entries from nklibs_info.userdb");
             }
             catch (Exception ex)
@@ -340,40 +373,65 @@ public class Program
                 {
                     XmlNode? jidNode = product.SelectSingleNode("JDX")
                                     ?? product.SelectSingleNode("ProductSpecific/JDX");
+                    XmlNode? huNode = product.SelectSingleNode("HU")
+                                    ?? product.SelectSingleNode("ProductSpecific/HU");
+                    XmlNode? snpidNode = product.SelectSingleNode("SNPID");
+                    XmlNode? regKeyNode = product.SelectSingleNode("RegKey");
                     XmlNode? nameNode = product.SelectSingleNode("Name");
+                    XmlNode? companyNode = product.SelectSingleNode("Company");
 
-                    if (jidNode != null && nameNode != null && !string.IsNullOrWhiteSpace(jidNode.InnerText))
+                    if (jidNode == null || snpidNode == null || string.IsNullOrWhiteSpace(jidNode.InnerText))
                     {
-                        string jid = jidNode.InnerText.Trim().ToUpper();
-                        string name = nameNode.InnerText.Trim();
+                        continue; // pas de clé exploitable pour ce produit
+                    }
 
-                        if (dbEntries.TryGetValue(jid, out string? existingName))
+                    string snpid = snpidNode.InnerText.Trim();
+                    string jdx = jidNode.InnerText.Trim().ToUpperInvariant();
+                    string hu = huNode != null ? huNode.InnerText.Trim().ToUpperInvariant() : "";
+                    string regKey = regKeyNode != null ? regKeyNode.InnerText.Trim()
+                                : (nameNode != null ? nameNode.InnerText.Trim() : snpid);
+                    string company = companyNode != null ? companyNode.InnerText.Trim() : "";
+
+                    if (dbEntries.TryGetValue(snpid, out var existing))
+                    {
+                        if (existing.Jdx != jdx || existing.Hu != hu || existing.RegKey != regKey || existing.Company != company)
                         {
-                            if (existingName != name)
-                            {
-                                dbEntries[jid] = name;
-                                updatedCount++;
-                            }
+                            dbEntries[snpid] = (jdx, hu, regKey, company);
+                            updatedCount++;
                         }
-                        else
-                        {
-                            dbEntries[jid] = name;
-                            addedCount++;
-                        }
+                    }
+                    else
+                    {
+                        dbEntries[snpid] = (jdx, hu, regKey, company);
+                        addedCount++;
                     }
                 }
             }
 
             if (addedCount > 0 || updatedCount > 0)
             {
-                var sortedEntries = new List<string>();
-                foreach (var kvp in dbEntries)
-                {
-                    sortedEntries.Add($"{kvp.Key} {kvp.Value}");
-                }
-                sortedEntries.Sort();
+                var sortedKeys = new List<string>(dbEntries.Keys);
+                sortedKeys.Sort(StringComparer.OrdinalIgnoreCase);
 
-                File.WriteAllLines(userDbPath, sortedEntries);
+                var lines = new List<string>();
+                foreach (var snpid in sortedKeys)
+                {
+                    var e = dbEntries[snpid];
+                    lines.Add($"[{snpid}]");
+                    lines.Add($"JDX={e.Jdx}");
+                    if (!string.IsNullOrEmpty(e.Hu))
+                    {
+                        lines.Add($"HU={e.Hu}");
+                    }
+                    lines.Add($"RegKey={e.RegKey}");
+                    if (!string.IsNullOrEmpty(e.Company))
+                    {
+                        lines.Add($"Company={e.Company}");
+                    }
+                    lines.Add(""); // ligne vide entre sections, comme le format original
+                }
+
+                File.WriteAllLines(userDbPath, lines);
                 Console.WriteLine($"Successfully updated {userDbPath}");
                 Console.WriteLine($"Added {addedCount} new entries, updated {updatedCount} entries.");
                 Console.WriteLine($"Total database size: {dbEntries.Count} entries.");
