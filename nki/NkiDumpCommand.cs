@@ -4,10 +4,6 @@ using System.Text;
 
 namespace NkiTool
 {
-    /// <summary>
-    /// Implémentation de la commande "dump" appelée depuis le dispatch
-    /// principal de program.cs. Lecture seule, ne modifie jamais le fichier.
-    /// </summary>
     public static class NkiDumpCommand
     {
         public static int Run(string path, string? outPath)
@@ -27,19 +23,22 @@ namespace NkiTool
             sb.AppendLine();
             sb.AppendLine("=== Références d'échantillons trouvées (.wav / .ncw) ===");
             var found = StringExtractor.FindSampleReferences(data);
-            if (found.Count == 0)
-            {
-                sb.AppendLine("Aucune référence trouvée en clair au niveau racine.");
-                sb.AppendLine("(Normal si les données sont compressées en ZLIB : voir les sous-blocs 'inflated' ci-dessus.)");
-            }
             foreach (var f in found)
             {
                 sb.AppendLine($"  offset={f.Offset,-10} encodage={f.Encoding,-8} valeur=\"{f.Value}\"");
             }
 
             sb.AppendLine();
-            sb.AppendLine("=== Scan récursif complémentaire dans chaque région ===");
+            sb.AppendLine("=== Scan récursif complémentaire dans chaque région (y compris blocs décompressés) ===");
             ScanRegionsForStrings(regions, sb);
+
+            int totalFound = found.Count + CountNestedStrings(regions);
+            if (totalFound == 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("AUCUNE référence .wav/.ncw trouvée nulle part (racine + sous-blocs décompressés).");
+                sb.AppendLine("Voir la liste des marqueurs/offsets ZLIB candidats ci-dessus pour diagnostiquer.");
+            }
 
             string report = sb.ToString();
             Console.WriteLine(report);
@@ -60,6 +59,15 @@ namespace NkiTool
             {
                 string flag = r.IsInflated ? " [ZLIB -> décompressé]" : "";
                 sb.AppendLine($"{indent}- tag=\"{r.Tag}\" offset={r.Offset} taille={r.Size}{flag}");
+
+                foreach (var candidate in r.ZlibCandidateOffsets)
+                {
+                    if (candidate >= 0)
+                        sb.AppendLine($"{indent}    [candidat ZLIB trouvé à l'offset absolu {candidate}]");
+                    else
+                        sb.AppendLine($"{indent}    [marqueur texte connu trouvé à l'offset absolu {-candidate}]");
+                }
+
                 if (r.Children.Count > 0)
                     DumpRegions(r.Children, depth + 1, sb);
             }
@@ -72,11 +80,22 @@ namespace NkiTool
                 var found = StringExtractor.FindSampleReferences(r.Payload, r.Offset);
                 foreach (var f in found)
                 {
-                    sb.AppendLine($"  [chunk \"{r.Tag}\"] offset={f.Offset,-10} encodage={f.Encoding,-8} valeur=\"{f.Value}\"");
+                    sb.AppendLine($"  [chunk \"{r.Tag}\"{(r.IsInflated ? " décompressé" : "")}] offset={f.Offset,-10} encodage={f.Encoding,-8} valeur=\"{f.Value}\"");
                 }
                 if (r.Children.Count > 0)
                     ScanRegionsForStrings(r.Children, sb);
             }
+        }
+
+        private static int CountNestedStrings(System.Collections.Generic.List<NkiRegion> regions)
+        {
+            int count = 0;
+            foreach (var r in regions)
+            {
+                count += StringExtractor.FindSampleReferences(r.Payload, r.Offset).Count;
+                count += CountNestedStrings(r.Children);
+            }
+            return count;
         }
     }
 }
