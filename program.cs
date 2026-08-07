@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Xml;
 using System.Text.RegularExpressions;
-
+using NkiTool;
 public class Program
 {
     private const string PluginDllName = "inNKX.wcx64";
@@ -182,6 +182,32 @@ public class Program
             return UpdateUserDb(customXmlPath);
         }
 
+        // Commande dump : diagnostic lecture seule d'un fichier NKI
+        if (operation == "dump")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool dump <fichier.nki> [--out rapport.txt]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            string? outReport = null;
+            int outIndex = argsList.IndexOf("--out");
+            if (outIndex >= 0 && outIndex + 1 < argsList.Count)
+            {
+                outReport = Path.GetFullPath(argsList[outIndex + 1]);
+            }
+
+            return NkiDumpCommand.Run(nkiPath, outReport);
+        }
+
         if (argsList.Count < 2)
         {
             ShowUsage();
@@ -195,6 +221,65 @@ public class Program
             Console.WriteLine($"Error: The source file '{path1}' does not exist.");
             return 1;
         }
+
+    try
+    {
+        PackDefaultParamStruct dps = new PackDefaultParamStruct();
+        dps.size = Marshal.SizeOf(typeof(PackDefaultParamStruct));
+        dps.PluginInterfaceVersionLow = 1;
+        dps.PluginInterfaceVersionHi = 2;
+        dps.DefaultIniName = Path.Combine(exeDirectory, "inNKX.ini");
+        PackSetDefaultParams(ref dps);
+    }
+    catch { }
+
+    try
+    {
+        if (operation == "list")
+        {
+            string? outList = argsList.Count >= 3 ? Path.GetFullPath(argsList[2]) : null;
+            return ListArchive(path1, outList);
+        }
+        else if (operation == "unpack" && argsList.Count >= 3)
+        {
+            string destinationFolder = Path.GetFullPath(argsList[2]);
+            HashSet<string>? selectedFiles = null;
+
+            if (argsList.Count >= 4 && argsList[3].StartsWith("@"))
+            {
+                string listFile = argsList[3].Substring(1);
+                if (File.Exists(listFile))
+                {
+                    var lines = File.ReadAllLines(listFile);
+                    selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var line in lines)
+                    {
+                        if (!string.IsNullOrWhiteSpace(line))
+                            selectedFiles.Add(line.Trim());
+                    }
+                }
+            }
+            
+            return DecompressArchive(path1, destinationFolder, selectedFiles, overwrite);
+        }
+        else if (operation == "pack" && argsList.Count >= 3)
+        {
+            string rootPath = argsList.Count >= 4 ? Path.GetFullPath(argsList[3]) : "";
+            return CompressFolder(argsList[2], path1, rootPath);
+        }
+        else
+        {
+            Console.WriteLine("Invalid operation or missing arguments.");
+            ShowUsage();
+            return 1;
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Critical Error: {ex.Message}");
+        return 1;
+    }
+}
 
         try
         {
@@ -262,6 +347,7 @@ public class Program
         Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
+        Console.WriteLine("  NkxTool dump <fichier.nki> [--out rapport.txt]");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
