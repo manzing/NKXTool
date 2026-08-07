@@ -6,11 +6,6 @@ using System.Text;
 
 namespace NkiTool
 {
-    /// <summary>
-    /// Représente une région de données identifiée dans le fichier NKI :
-    /// soit un chunk brut (tag + taille + payload), soit un bloc obtenu
-    /// après décompression ZLIB d'un chunk parent.
-    /// </summary>
     public class NkiRegion
     {
         public string Tag = "";
@@ -19,18 +14,15 @@ namespace NkiTool
         public byte[] Payload = Array.Empty<byte>();
         public bool IsInflated;
         public List<NkiRegion> Children = new();
+        public List<long> ZlibCandidateOffsets = new();
     }
 
-    /// <summary>
-    /// Scanner générique et défensif : il ne présuppose PAS la structure exacte
-    /// du format NKI (tags, tailles de champs). Il tente une lecture de type
-    /// "conteneur de chunks" (tag ASCII 4 octets + taille UInt32 LE + payload),
-    /// et détecte automatiquement les blocs ZLIB imbriqués pour les décompresser
-    /// et les ré-analyser récursivement. Le but est de VALIDER la structure
-    /// réelle sur vos fichiers avant d'écrire la logique de patch.
-    /// </summary>
     public static class NkiChunkScanner
     {
+        // Fenêtre de recherche d'en-tête ZLIB (0x78 ..) à l'intérieur d'un buffer.
+        // 234 Ko de fichier -> on peut se permettre de scanner large sans souci de perf.
+        private const int ZlibSearchWindow = 1_000_000;
+
         public static List<NkiRegion> Scan(byte[] data)
         {
             var regions = new List<NkiRegion>();
@@ -46,9 +38,6 @@ namespace NkiTool
                 string tag = SafeAscii(data, pos, 4);
                 uint size = BitConverter.ToUInt32(data, pos + 4);
 
-                // Garde-fou : si la taille annoncée est aberrante, on abandonne
-                // l'hypothèse "chunk" à partir d'ici et on traite le reste comme
-                // un bloc opaque (permet de ne pas planter sur un format différent).
                 if (size == 0 || pos + 8 + size > end || size > 200_000_000)
                 {
                     var opaque = new NkiRegion
@@ -58,6 +47,13 @@ namespace NkiTool
                         Size = end - pos,
                         Payload = Slice(data, pos, end - pos)
                     };
+
+                    // Correctif : on tente quand même de trouver et décompresser
+                    // un flux ZLIB n'importe où dans ce bloc opaque, plutôt que
+                    // d'abandonner silencieusement.
+                    TryInflateAndRecurse(opaque);
+                    ScanForKnownMarkers(opaque);
+
                     outRegions.Add(opaque);
                     return;
                 }
@@ -78,38 +74,45 @@ namespace NkiTool
 
             if (pos < end)
             {
-                outRegions.Add(new NkiRegion
+                var tail = new NkiRegion
                 {
                     Tag = "TAIL",
                     Offset = pos,
                     Size = end - pos,
                     Payload = Slice(data, pos, end - pos)
-                });
+                };
+                TryInflateAndRecurse(tail);
+                outRegions.Add(tail);
             }
         }
 
         private static void TryInflateAndRecurse(NkiRegion region)
         {
-            var inflated = TryZlibInflate(region.Payload);
+            var (inflated, foundAtOffset) = TryZlibInflateAnywhere(region.Payload);
             if (inflated != null)
             {
                 region.IsInflated = true;
+                region.ZlibCandidateOffsets.Add(region.Offset + foundAtOffset);
                 TryScanAsChunks(inflated, 0, inflated.Length, region.Children);
-                // Remplace le payload affiché par la version décompressée pour
-                // que le scan de chaînes (StringScanner) l'exploite aussi.
                 region.Payload = inflated;
             }
         }
 
         /// <summary>
-        /// Tente une décompression ZLIB à partir de n'importe quel offset où
-        /// l'en-tête ZLIB (0x78 ..) est détecté, pas uniquement au début du buffer.
+        /// Recherche un en-tête ZLIB (0x78 suivi d'un second octet plausible)
+        /// n'importe où dans le buffer (pas seulement au début), sur une fenêtre
+        /// raisonnable, et tente une décompression à chaque candidat trouvé.
         /// </summary>
-        public static byte[]? TryZlibInflate(byte[] buffer)
+        public static (byte[]? data, int offset) TryZlibInflateAnywhere(byte[] buffer)
         {
-            for (int offset = 0; offset < Math.Min(buffer.Length, 16); offset++)
+            int limit = Math.Min(buffer.Length - 2, ZlibSearchWindow);
+            for (int offset = 0; offset < limit; offset++)
             {
                 if (buffer[offset] != 0x78) continue;
+
+                byte second = buffer[offset + 1];
+                // Bytes valides usuels après 0x78 pour un flux zlib : 0x01, 0x5E, 0x9C, 0xDA
+                if (second != 0x01 && second != 0x5E && second != 0x9C && second != 0xDA) continue;
 
                 try
                 {
@@ -118,14 +121,41 @@ namespace NkiTool
                     using var output = new MemoryStream();
                     zlib.CopyTo(output);
                     var result = output.ToArray();
-                    if (result.Length > 0) return result;
+                    if (result.Length > 0) return (result, offset);
                 }
                 catch
                 {
-                    // Pas un flux ZLIB valide à cet offset, on continue.
+                    // pas un flux valide à cet offset, on continue
                 }
             }
-            return null;
+            return (null, -1);
+        }
+
+        private static readonly string[] KnownMarkers = { "hsin", "DSIN", "2SAM", "PRES", "PROG", "PLST", "FNTB", "PARS" };
+
+        /// <summary>
+        /// Recherche des tags/marqueurs connus (issus de la documentation
+        /// communautaire du format NI DSIN) n'importe où dans un bloc, pour
+        /// aider à localiser la structure même sans specs officielles.
+        /// </summary>
+        private static void ScanForKnownMarkers(NkiRegion region)
+        {
+            foreach (var marker in KnownMarkers)
+            {
+                var markerBytes = Encoding.ASCII.GetBytes(marker);
+                for (int i = 0; i + markerBytes.Length <= region.Payload.Length; i++)
+                {
+                    bool match = true;
+                    for (int j = 0; j < markerBytes.Length; j++)
+                    {
+                        if (region.Payload[i + j] != markerBytes[j]) { match = false; break; }
+                    }
+                    if (match)
+                    {
+                        region.ZlibCandidateOffsets.Add(-(region.Offset + i)); // négatif = marqueur texte, pas zlib
+                    }
+                }
+            }
         }
 
         private static string SafeAscii(byte[] data, int offset, int len)
