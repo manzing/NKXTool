@@ -222,65 +222,6 @@ public class Program
             return 1;
         }
 
-    try
-    {
-        PackDefaultParamStruct dps = new PackDefaultParamStruct();
-        dps.size = Marshal.SizeOf(typeof(PackDefaultParamStruct));
-        dps.PluginInterfaceVersionLow = 1;
-        dps.PluginInterfaceVersionHi = 2;
-        dps.DefaultIniName = Path.Combine(exeDirectory, "inNKX.ini");
-        PackSetDefaultParams(ref dps);
-    }
-    catch { }
-
-    try
-    {
-        if (operation == "list")
-        {
-            string? outList = argsList.Count >= 3 ? Path.GetFullPath(argsList[2]) : null;
-            return ListArchive(path1, outList);
-        }
-        else if (operation == "unpack" && argsList.Count >= 3)
-        {
-            string destinationFolder = Path.GetFullPath(argsList[2]);
-            HashSet<string>? selectedFiles = null;
-
-            if (argsList.Count >= 4 && argsList[3].StartsWith("@"))
-            {
-                string listFile = argsList[3].Substring(1);
-                if (File.Exists(listFile))
-                {
-                    var lines = File.ReadAllLines(listFile);
-                    selectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var line in lines)
-                    {
-                        if (!string.IsNullOrWhiteSpace(line))
-                            selectedFiles.Add(line.Trim());
-                    }
-                }
-            }
-            
-            return DecompressArchive(path1, destinationFolder, selectedFiles, overwrite);
-        }
-        else if (operation == "pack" && argsList.Count >= 3)
-        {
-            string rootPath = argsList.Count >= 4 ? Path.GetFullPath(argsList[3]) : "";
-            return CompressFolder(argsList[2], path1, rootPath);
-        }
-        else
-        {
-            Console.WriteLine("Invalid operation or missing arguments.");
-            ShowUsage();
-            return 1;
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"Critical Error: {ex.Message}");
-        return 1;
-    }
-}
-
         try
         {
             PackDefaultParamStruct dps = new PackDefaultParamStruct();
