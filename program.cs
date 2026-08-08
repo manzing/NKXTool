@@ -207,6 +207,37 @@ public class Program
 
             return NkiDumpCommand.Run(nkiPath, outReport);
         }
+        if (operation == "nki-versionscan")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool nki-versionscan <fichier.nki> [--length N] [--out rapport.txt]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            int scanLength = 4096;
+            int lenIndex = argsList.IndexOf("--length");
+            if (lenIndex >= 0 && lenIndex + 1 < argsList.Count)
+            {
+                int.TryParse(argsList[lenIndex + 1], out scanLength);
+            }
+
+            string? outReport = null;
+            int outIndex = argsList.IndexOf("--out");
+            if (outIndex >= 0 && outIndex + 1 < argsList.Count)
+            {
+                outReport = Path.GetFullPath(argsList[outIndex + 1]);
+            }
+
+            return NkiVersionScan.Run(nkiPath, scanLength, outReport);
+        }
 
         if (argsList.Count < 2)
         {
