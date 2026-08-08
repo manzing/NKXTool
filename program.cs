@@ -187,7 +187,7 @@ public class Program
         {
             if (argsList.Count < 2)
             {
-                Console.WriteLine("Usage: NkxTool dump <fichier.nki> [--out rapport.txt]");
+                Console.WriteLine("Usage: NkxTool dump <instrument.nki> [--out report.txt]");
                 return 1;
             }
 
@@ -207,11 +207,11 @@ public class Program
 
             return NkiDumpCommand.Run(nkiPath, outReport);
         }
-        if (operation == "nki-versionscan")
+        if (operation == "nki-infoscan")
         {
             if (argsList.Count < 2)
             {
-                Console.WriteLine("Usage: NkxTool nki-versionscan <fichier.nki> [--length N] [--out rapport.txt]");
+                Console.WriteLine("Usage: NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
                 return 1;
             }
 
@@ -236,13 +236,13 @@ public class Program
                 outReport = Path.GetFullPath(argsList[outIndex + 1]);
             }
 
-            return NkiVersionScan.Run(nkiPath, scanLength, outReport);
+            return NkiInfoScan.Run(nkiPath, scanLength, outReport);
         }
         if (operation == "nki-version")
         {
             if (argsList.Count < 2)
             {
-                Console.WriteLine("Usage: NkxTool nki-version <fichier.nki> [-v]");
+                Console.WriteLine("Usage: NkxTool nki-version <instrument.nki> [-v]");
                 return 1;
             }
 
