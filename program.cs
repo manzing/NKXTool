@@ -238,6 +238,25 @@ public class Program
 
             return NkiVersionScan.Run(nkiPath, scanLength, outReport);
         }
+        if (operation == "nki-version")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool nki-version <fichier.nki> [-v]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.Error.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            bool verbose = argsList.Contains("-v") || argsList.Contains("--verbose");
+
+            return NkiVersionCommand.Run(nkiPath, verbose);
+        }
 
         if (argsList.Count < 2)
         {
