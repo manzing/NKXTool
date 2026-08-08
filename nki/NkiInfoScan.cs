@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace NkiTool
 {
-    public static class NkiVersionScan
+    public static class NkiInfoScan
     {
         private static readonly Regex VersionPattern =
             new Regex(@"\b\d{1,3}\.\d{1,3}(\.\d{1,5}){0,2}\b", RegexOptions.Compiled);
