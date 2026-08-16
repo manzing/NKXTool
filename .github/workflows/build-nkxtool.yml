@@ -3,10 +3,10 @@ name: Build NkxTool Executable # Nom du workflow affiché sur GitHub
 on:
   push:
     branches:
-      - main # Déclenche le workflow sur les pushes vers la branche 'main'
+      - dev-nki # Déclenche le workflow sur les pushes vers la branche 'main'
   pull_request:
     branches:
-      - main # Déclenche le workflow sur les pull requests vers la branche 'main'
+      - dev-nki # Déclenche le workflow sur les pull requests vers la branche 'main'
 
 jobs:
   build:

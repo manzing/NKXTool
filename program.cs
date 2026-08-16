@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Xml;
 using System.Text.RegularExpressions;
-
+using NkiTool;
 public class Program
 {
     private const string PluginDllName = "inNKX.wcx64";
@@ -182,6 +182,82 @@ public class Program
             return UpdateUserDb(customXmlPath);
         }
 
+        // Commande dump : diagnostic lecture seule d'un fichier NKI
+        if (operation == "dump")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool dump <instrument.nki> [--out report.txt]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            string? outReport = null;
+            int outIndex = argsList.IndexOf("--out");
+            if (outIndex >= 0 && outIndex + 1 < argsList.Count)
+            {
+                outReport = Path.GetFullPath(argsList[outIndex + 1]);
+            }
+
+            return NkiDumpCommand.Run(nkiPath, outReport);
+        }
+        if (operation == "nki-infoscan")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            int scanLength = 4096;
+            int lenIndex = argsList.IndexOf("--length");
+            if (lenIndex >= 0 && lenIndex + 1 < argsList.Count)
+            {
+                int.TryParse(argsList[lenIndex + 1], out scanLength);
+            }
+
+            string? outReport = null;
+            int outIndex = argsList.IndexOf("--out");
+            if (outIndex >= 0 && outIndex + 1 < argsList.Count)
+            {
+                outReport = Path.GetFullPath(argsList[outIndex + 1]);
+            }
+
+            return NkiInfoScan.Run(nkiPath, scanLength, outReport);
+        }
+        if (operation == "nki-version")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool nki-version <instrument.nki> [-v]");
+                return 1;
+            }
+
+            string nkiPath = Path.GetFullPath(argsList[1]);
+            if (!File.Exists(nkiPath))
+            {
+                Console.Error.WriteLine($"Error: The source file '{nkiPath}' does not exist.");
+                return 1;
+            }
+
+            bool verbose = argsList.Contains("-v") || argsList.Contains("--verbose");
+
+            return NkiVersionCommand.Run(nkiPath, verbose);
+        }
+
         if (argsList.Count < 2)
         {
             ShowUsage();
@@ -262,15 +338,23 @@ public class Program
         Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
+        Console.WriteLine("  NkxTool dump <fichier.nki> [--out rapport.txt]");
+        Console.WriteLine("  NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
+        Console.WriteLine("  NkxTool nki-version <instrument.nki> [-v]");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
         Console.WriteLine("  NkxTool update");
         Console.WriteLine("  NkxTool update -f \"C:\\Program Files\\Common Files\\Native Instruments\\Service Center\\NativeAccess.xml\"");
+        Console.WriteLine("  NkxTool nki-infoscan \"Piano.nki\" --length 4096 --out version_report.txt");
+        Console.WriteLine("  NkxTool nki-version \"Piano.nki\"");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
         Console.WriteLine("  -f : Specify a custom path to NativeAccess.xml (update only)");
+        Console.WriteLine("  --length N : Number of bytes to scan from the start of the file (nki-infoscan only, default 4096)");
+        Console.WriteLine("  --out : Write the report to a file instead of (or in addition to) the console");
+        Console.WriteLine("  -v : Verbose mode, lists all version candidates found (nki-version only)");
         Console.WriteLine();
         Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks");
     }
