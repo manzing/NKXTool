@@ -51,13 +51,22 @@ NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
 # If the text file is located alongside the source samples, rootPath is optional.
 NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
 ```
-### 2. Udate
+### 4. Update
 Update internal inNKX database file nklibs_info.userdb by syncing with system's NativeAccess.xml.
 ```cmd
 NkxTool update
 
 # Example:
 NkxTool update
+```
+
+### 5. Nki-version
+Analyse a NKI instrument and display required Kontakt version
+```cmd
+NkxTool nki-version <instrument_file>
+
+# Example:
+NkxTool nki-version "C:\Library\Instruments\Piano.nki"
 ```
 
 ## 🏗️ Compilation
