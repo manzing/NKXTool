@@ -339,15 +339,22 @@ public class Program
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
         Console.WriteLine("  NkxTool dump <fichier.nki> [--out rapport.txt]");
+        Console.WriteLine("  NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
+        Console.WriteLine("  NkxTool nki-version <instrument.nki> [-v]");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
         Console.WriteLine("  NkxTool update");
         Console.WriteLine("  NkxTool update -f \"C:\\Program Files\\Common Files\\Native Instruments\\Service Center\\NativeAccess.xml\"");
+        Console.WriteLine("  NkxTool nki-infoscan \"Piano.nki\" --length 4096 --out version_report.txt");
+        Console.WriteLine("  NkxTool nki-version \"Piano.nki\"");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
         Console.WriteLine("  -f : Specify a custom path to NativeAccess.xml (update only)");
+        Console.WriteLine("  --length N : Number of bytes to scan from the start of the file (nki-infoscan only, default 4096)");
+        Console.WriteLine("  --out : Write the report to a file instead of (or in addition to) the console");
+        Console.WriteLine("  -v : Verbose mode, lists all version candidates found (nki-version only)");
         Console.WriteLine();
         Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks");
     }
