@@ -80,5 +80,14 @@ dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile
 ```
 The compiled `NkxTool.exe` will be located in the `bin\Release\net10.0\win-x64\publish\` directory.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=manzing%2Fnkxtool&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&legend=top-left" />
+ </picture>
+</a>
 ## ⚠️ Notes on Decryption
 NkxTool acts as a bridge. If an archive is protected, the underlying WCX plugin will attempt to locate the decryption key on your Windows system using standard Registry/COM calls. If the library is not properly registered on your system, the files may still extract, but they could be unreadable or empty, depending on the plugin's internal behavior.
