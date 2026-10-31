@@ -1,27 +1,31 @@
-# NkxTool - Advanced Kontakt Archive CLI Utility
+# NkxTool - Native Kontakt Archive CLI Utility & Engine
 
-NkxTool is a robust, 64-bit command-line utility for managing Native Instruments Kontakt archives. It acts as a specialized wrapper around the `inNKX.wcx64` plugin, allowing you to list files, extract, and seamlessly pack libraries.
+NkxTool is a high-performance, 100% native 64-bit .NET 10 utility and library for managing Native Instruments Kontakt archives. Built entirely in modern C# (`NKXTool.Core`), it operates completely standalone without requiring any external C++ plugin or Total Commander WCX dependencies.
 
 ## 🚀 Key Features
 
-- **Multi-Format Support:** Read and write `.nkx` (Audio/Samples), `.nkr` (Resources/Scripts), and `.nicnt` (Library Info) containers.
-- **Smart Packing (Auto-Split):** Automatically handles the strict 1.95 GB (`2,090,000,000` bytes) size limit of the NKX format. If a source folder exceeds this limit, NkxTool automatically splits the output into `_00.nkx`, `_01.nkx`, etc.
-- **Filelist Support:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), perfect for scripted audio conversions or selective repacking.
-- **COM STA Threading:** Fully initializes Windows COM components natively, ensuring the plugin can properly search for decryption keys and generate `.userdb` files.
-- **Update function for internal database:** synced with system NativeAccess.xml with exotic / old library unique support.
-- **Modern Architecture:** Built with C# on .NET 10 (win-x64), completely standalone.
+- **Multi-Format Support:** Native reading, parsing, and extraction for `.nkx` (Audio Samples), `.nkr` (Resources/Scripts/Pictures), `.nicnt` (Monolith Library Info & Artwork), and legacy `.nks` (Kontakt 1/2 containers).
+- **Multi-Threaded Extraction:** High-speed parallel extraction engine utilizing modern thread pooling, with per-file progress reporting and detailed error tracking.
+- **Smart Packing (Auto-Split):** Generates compliant Kontakt archives with automatic splitting at the 1.95 GB (`2,090,000,000` bytes) volume threshold (`_00.nkx`, `_01.nkx`, etc.).
+- **Filelist Packing:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), ideal for automated batch pipelines and audio conversions.
+- **Decryption Database (`nklibs.db`):** Fully integrated AES-ECB hardware-accelerated decryption engine powered by an INI key database. Keys can be populated or synchronized automatically from `NativeAccess.xml` using `nkxtool update`.
+- **Pure Standalone Distribution:** Compiles to a single executable (`NKXTool.exe`). No WCX DLLs, no external dependencies.
 
-## 📋 Requirements
+## 📋 Requirements & Runtime Files
 
--   [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (For building from source)
--   `inNKX.wcx64` 64-bit plugin file (Must be placed in the project root before building, or in the same directory as the compiled executable).
+### For Usage:
+1. **`NKXTool.exe`** - Standalone executable (incorporates `NKXTool` and `NKXTool.Core`).
+2. **`nklibs.db`** (Optional / Recommended) - Key database for decrypting protected commercial Kontakt libraries. Can be automatically created/updated with `NKXTool update`.
+
+### For Development / Building from source:
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download)
 
 ## 🛠️ Usage
 
-Open your terminal and use `NkxTool.exe` with one of the three main commands: `list`, `unpack`, or `pack`.
+Use `NkxTool.exe` with one of the main commands: `list`, `unpack`, `pack`, `update`, `dump`, `nki-infoscan`, or `nki-version`.
 
 ### 1. List Archive Contents
-Outputs the relative paths of all files contained inside an archive. You can optionally save this output to a text file.
+Outputs the relative paths of all files contained inside an archive:
 ```cmd
 NkxTool list <source_file> [outputList.txt]
 
@@ -31,45 +35,38 @@ NkxTool list "C:\Library\Samples_1.nkx" "C:\temp\filelist.txt"
 ```
 
 ### 2. Unpack (Decompress)
-Extracts the entire content of an archive into the specified destination folder, recreating the original directory structure.
+Extracts the entire content of an archive into the specified destination folder, recreating the original directory structure:
 ```cmd
-NkxTool unpack <source_file> <destinationFolder>
+NkxTool unpack <source_file> <destinationFolder> [-y]
 
-# Example:
+# Examples:
 NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\"
+NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\" -y
 ```
 
 ### 3. Pack (Compress)
-Creates a new archive from a source folder or a text file containing a list of relative paths.
+Creates a new archive from a source folder or a text file containing a list of relative paths:
 ```cmd
 NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]
 
 # Example A: Pack an entire folder
 NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
 
-# Example B: Pack using a file list (requires '@')
-# If the text file is located alongside the source samples, rootPath is optional.
+# Example B: Pack using a file list
 NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
 ```
-### 2. Udate
-Update internal inNKX database file nklibs_info.userdb by syncing with system's NativeAccess.xml.
+
+### 4. Update Key Database
+Synchronize or generate `nklibs.db` by scanning the system's `NativeAccess.xml` file (or a specified custom XML):
 ```cmd
 NkxTool update
-
-# Example:
-NkxTool update
+NkxTool update -f "C:\Path\To\NativeAccess.xml"
 ```
 
 ## 🏗️ Compilation
 
-To compile the project into a single, optimized executable:
-
-1. Place your 64-bit `inNKX.wcx` file in the root directory next to `NkxTool.csproj`.
-2. Run the following .NET CLI command:
+To compile into a single standalone executable:
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
+dotnet publish NKXTool.csproj -c Release -r win-x64 /p:PublishSingleFile=true
 ```
-The compiled `NkxTool.exe` will be located in the `bin\Release\net10.0\win-x64\publish\` directory.
-
-## ⚠️ Notes on Decryption
-NkxTool acts as a bridge. If an archive is protected, the underlying WCX plugin will attempt to locate the decryption key on your Windows system using standard Registry/COM calls. If the library is not properly registered on your system, the files may still extract, but they could be unreadable or empty, depending on the plugin's internal behavior.
+The resulting `NKXTool.exe` is located in `bin\Release\net10.0\win-x64\publish\`.

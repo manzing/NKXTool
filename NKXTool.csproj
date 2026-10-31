@@ -21,8 +21,4 @@
     <ProjectReference Include="NKXTool.Core\NKXTool.Core.csproj" />
   </ItemGroup>
 
-  <Target Name="CopyNkxPlugin" AfterTargets="Publish"> 
-    <Copy SourceFiles="$(ProjectDir)inNKX.wcx64" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
-  </Target>
-
 </Project>
