@@ -21,4 +21,13 @@
     <ProjectReference Include="NKXTool.Core\NKXTool.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="nklibs.db">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="nklibs_info.userdb">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

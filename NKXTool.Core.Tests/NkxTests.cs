@@ -12,6 +12,140 @@ public class NkxTests
     private const string BrassEnsembleNicnt = @"C:\Dev\AI-Workspaces\REA\innkx\Kontakt_files\Brass Ensemble.nicnt";
     private const string EthnicWindsNicnt = @"C:\Dev\AI-Workspaces\REA\innkx\Kontakt_files\Ethnic Winds.nicnt";
     private const string EwqlsoNks = @"C:\Dev\AI-Workspaces\REA\innkx\Kontakt_files\EWQLSO_Gold_lib_part8.nks";
+    private const string BrassEnsembleNkx = @"C:\temp\source\Brass Ensemble\Samples\Brass Ensemble.nkx";
+    private const string BrassEnsembleNkr = @"C:\temp\source\Brass Ensemble\Samples\BP Brass Ensemble.nkr";
+    private const string BrassEnsembleRefNcw = @"C:\temp\test_v11_extract\Samples\FSSoloBrass_FrenchHorn_CLOSEStacRR1_1_41_A#1.ncw";
+
+    [Fact]
+    public void TestOpenEntryStreamEncrypted()
+    {
+        if (!File.Exists(BrassEnsembleNkx)) return;
+
+        using var archive = NkxArchive.Open(BrassEnsembleNkx);
+        var entry = archive.Entries.First(e => !e.IsDirectory);
+
+        using var stream = archive.OpenEntryStream(entry);
+        byte[] magic = new byte[8];
+        int read = stream.Read(magic, 0, 8);
+
+        Assert.Equal(8, read);
+        Assert.Equal((byte)0x01, magic[0]);
+        Assert.Equal((byte)0xa8, magic[1]);
+        Assert.Equal((byte)0x9e, magic[2]);
+        Assert.Equal((byte)0xd6, magic[3]);
+        Assert.Equal((byte)0x31, magic[4]);
+        Assert.Equal((byte)0x01, magic[5]);
+        Assert.Equal((byte)0x00, magic[6]);
+        Assert.Equal((byte)0x00, magic[7]);
+    }
+
+    [Fact]
+    public void TestNkxKeystreamExactVector()
+    {
+        byte[] jdx = Convert.FromHexString("844555DAC4952999298662712FE2FF0A3711CB8299D006C432BAEAD914F4D0E6");
+        byte[] hu = Convert.FromHexString("1EE59C8EC4BCEA9BA917F4091B835DC4");
+
+        byte[] keystream = Cryptography.NkxKeystream.CreateKeystream(jdx, hu);
+        Assert.Equal(0x10000, keystream.Length);
+
+        byte[] expectedFirst16 = Convert.FromHexString("55FA99727A37D4362B32019F11D3D5A7");
+        Assert.Equal(expectedFirst16, keystream.AsSpan(0, 16).ToArray());
+
+        byte[] ciphertext = Convert.FromHexString("545207A44B36D4362A32199F9168D5A7");
+        byte[] decrypted = new byte[16];
+        ciphertext.CopyTo(decrypted, 0);
+
+        Cryptography.NkxKeystream.ApplyKeystream(keystream, 0, decrypted);
+
+        // Expected Kontakt NCW v1 header: magic 01 A8 9E D6 31 01 00 00, mono 24-bit 48kHz
+        byte[] expectedNcwHdr = Convert.FromHexString("01A89ED6310100000100180080BB0000");
+        Assert.Equal(expectedNcwHdr, decrypted);
+    }
+
+    [Fact]
+    public async Task TestExtractEncryptedBrassEnsembleNkxSingle()
+    {
+        if (!File.Exists(BrassEnsembleNkx)) return;
+
+        string outDir = Path.Combine(Path.GetTempPath(), "NKXTool_Test_BrassNkx_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var archive = NkxArchive.Open(BrassEnsembleNkx);
+            Assert.True(archive.Entries.Count > 0);
+
+            const string sampleName = @"Samples\FSSoloBrass_FrenchHorn_CLOSEStacRR1_1_41_A#1.ncw";
+            var result = await archive.ExtractAllAsync(new ExtractionOptions
+            {
+                DestinationDirectory = outDir,
+                SelectedFiles = new HashSet<string> { sampleName },
+                Overwrite = true
+            });
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(1, result.ExtractedCount);
+
+            string extractedFile = Path.Combine(outDir, sampleName);
+            Assert.True(File.Exists(extractedFile));
+
+            byte[] extractedBytes = File.ReadAllBytes(extractedFile);
+            Assert.True(extractedBytes.Length > 16);
+
+            // Verify valid NCW magic
+            Assert.Equal((byte)0x01, extractedBytes[0]);
+            Assert.Equal((byte)0xa8, extractedBytes[1]);
+            Assert.Equal((byte)0x9e, extractedBytes[2]);
+            Assert.Equal((byte)0xd6, extractedBytes[3]);
+
+            // Compare bit-for-bit against reference extraction if available
+            if (File.Exists(BrassEnsembleRefNcw))
+            {
+                byte[] refBytes = File.ReadAllBytes(BrassEnsembleRefNcw);
+                Assert.Equal(refBytes.Length, extractedBytes.Length);
+                Assert.Equal(refBytes, extractedBytes);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(outDir))
+                Directory.Delete(outDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TestExtractEncryptedNkrResource()
+    {
+        if (!File.Exists(BrassEnsembleNkr)) return;
+
+        string outDir = Path.Combine(Path.GetTempPath(), "NKXTool_Test_BrassNkr_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var archive = NkxArchive.Open(BrassEnsembleNkr);
+            Assert.True(archive.Entries.Count > 0);
+
+            // Extract first entry (resource txt)
+            var firstEntry = archive.Entries.First(e => !e.IsDirectory);
+            var result = await archive.ExtractAllAsync(new ExtractionOptions
+            {
+                DestinationDirectory = outDir,
+                SelectedFiles = new HashSet<string> { firstEntry.RelativePath },
+                Overwrite = true
+            });
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(1, result.ExtractedCount);
+
+            string extractedFile = Path.Combine(outDir, firstEntry.RelativePath);
+            Assert.True(File.Exists(extractedFile));
+
+            string text = File.ReadAllText(extractedFile);
+            Assert.StartsWith("Has Alpha Channel:", text);
+        }
+        finally
+        {
+            if (Directory.Exists(outDir))
+                Directory.Delete(outDir, recursive: true);
+        }
+    }
 
     [Fact]
     public void TestOpenEwqlsoNks()

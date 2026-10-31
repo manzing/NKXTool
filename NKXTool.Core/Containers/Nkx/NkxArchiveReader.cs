@@ -3,12 +3,14 @@ namespace NKXTool.Core.Containers.Nkx;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
+using System.Xml;
 using NKXTool.Core.Common;
 using NKXTool.Core.Cryptography;
 
 /// <summary>
 /// High-performance native reader and extractor for Kontakt containers (.nkx, .nkr, .nks).
-/// Supports modern containers (0x0110/0x0401) with recursive directory chunk trees and legacy NKS (0x0100).
+/// Supports modern containers (0x0110, 0x0111, 0x0401) with recursive directory chunk trees,
+/// automatic transparent AES-256 CTR / LCG decryption, and legacy NKS (0x0100).
 /// </summary>
 public sealed class NkxArchiveReader : IArchiveReader
 {
@@ -17,8 +19,9 @@ public sealed class NkxArchiveReader : IArchiveReader
     public const uint ChunkResourceDataMagic = 0x2ae905fa; // Pictures, fonts, text resources
     public const uint ChunkScriptDataMagic = 0x4916e63c; // Script data
 
-    public const uint VersionModern = 0x0110;
-    public const uint VersionLegacy = 0x0100;
+    public const ushort VersionModern = 0x0110;
+    public const ushort VersionModernEncrypted = 0x0111;
+    public const ushort VersionLegacy = 0x0100;
 
     private readonly string _filePath;
     private readonly ArchiveType _archiveType;
@@ -26,10 +29,17 @@ public sealed class NkxArchiveReader : IArchiveReader
     private readonly NkxKeyDatabase _keyDatabase;
     private FileStream? _fileStream;
     private int _nextEntryId = 1;
+    private bool _isContainerEncrypted;
+    private ushort _containerKeyId;
+
+    private byte[]? _keystream;
+    private bool _keystreamResolved;
+    private readonly object _keystreamLock = new();
 
     public ArchiveType ArchiveType => _archiveType;
     public string FilePath => _filePath;
     public IReadOnlyList<ArchiveEntry> Entries => _entries;
+    public bool IsEncrypted => _isContainerEncrypted || _entries.Any(e => e.IsEncrypted);
 
     public NkxArchiveReader(string filePath, NkxKeyDatabase? keyDatabase = null)
     {
@@ -61,12 +71,16 @@ public sealed class NkxArchiveReader : IArchiveReader
         stream.ReadExactly(hdr);
 
         uint magic = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(0, 4));
-        uint version = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(4, 4));
+        ushort version = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(4, 2));
+        ushort keyId = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(6, 2));
 
         if (magic != ChunkContainerMagic)
             throw new InvalidDataException($"Unsupported archive magic: 0x{magic:X8} (expected 0x{ChunkContainerMagic:X8}).");
 
-        if (version == VersionModern || version == 0x0401)
+        _isContainerEncrypted = (version == VersionModernEncrypted || keyId != 0);
+        _containerKeyId = keyId;
+
+        if (version == VersionModern || version == VersionModernEncrypted || version == 0x0401)
         {
             ParseModernContainer(stream);
         }
@@ -146,6 +160,10 @@ public sealed class NkxArchiveReader : IArchiveReader
             if (probeRead < 22) break;
 
             uint chunkMagic = BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(0, 4));
+            ushort chunkVer = BinaryPrimitives.ReadUInt16LittleEndian(chunkProbe.AsSpan(4, 2));
+            ushort chunkKey = BinaryPrimitives.ReadUInt16LittleEndian(chunkProbe.AsSpan(6, 2));
+            bool isChunkEncrypted = _isContainerEncrypted || chunkVer == VersionModernEncrypted || chunkKey != 0;
+
             long itemSize = 0;
             int headerLen = 0;
 
@@ -170,9 +188,20 @@ public sealed class NkxArchiveReader : IArchiveReader
                 break;
             }
 
-            string relativePath = string.IsNullOrEmpty(currentPath)
-                ? fileRec.name
-                : Path.Combine(currentPath, fileRec.name);
+            string relativePath;
+            if (string.IsNullOrEmpty(currentPath))
+            {
+                relativePath = fileRec.name;
+            }
+            else if (fileRec.name.StartsWith(currentPath + "\\", StringComparison.OrdinalIgnoreCase) ||
+                     fileRec.name.StartsWith(currentPath + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                relativePath = fileRec.name;
+            }
+            else
+            {
+                relativePath = Path.Combine(currentPath, fileRec.name);
+            }
 
             _entries.Add(new ArchiveEntry
             {
@@ -182,7 +211,7 @@ public sealed class NkxArchiveReader : IArchiveReader
                 PackedSize = itemSize,
                 DataOffset = dataCur + headerLen,
                 IsDirectory = false,
-                IsEncrypted = false,
+                IsEncrypted = isChunkEncrypted,
                 RawType = fileRec.type
             });
 
@@ -193,9 +222,25 @@ public sealed class NkxArchiveReader : IArchiveReader
         var subdirs = dirRecords.Where(r => r.type == 1).ToList();
         foreach (var sub in subdirs)
         {
-            string subPath = string.IsNullOrEmpty(currentPath)
-                ? sub.name
-                : Path.Combine(currentPath, sub.name);
+            string subPath;
+            if (string.IsNullOrEmpty(currentPath))
+            {
+                subPath = sub.name;
+            }
+            else if (sub.name.StartsWith(currentPath + "\\", StringComparison.OrdinalIgnoreCase) ||
+                     sub.name.StartsWith(currentPath + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                subPath = sub.name;
+            }
+            else if (currentPath.EndsWith("\\" + sub.name, StringComparison.OrdinalIgnoreCase) ||
+                     currentPath.Equals(sub.name, StringComparison.OrdinalIgnoreCase))
+            {
+                subPath = currentPath;
+            }
+            else
+            {
+                subPath = Path.Combine(currentPath, sub.name);
+            }
 
             dataCur = ParseDirectoryRecursive(stream, dataCur, subPath);
         }
@@ -293,10 +338,147 @@ public sealed class NkxArchiveReader : IArchiveReader
         }
     }
 
+    /// <summary>
+    /// Obtains or creates the cached 64 KB keystream for decrypting protected container entries.
+    /// </summary>
+    public byte[]? GetOrCreateKeystream()
+    {
+        if (_keystreamResolved) return _keystream;
+
+        lock (_keystreamLock)
+        {
+            if (_keystreamResolved) return _keystream;
+
+            var keyEntry = ResolveKeyEntry();
+            if (keyEntry != null && keyEntry.JdxBytes.Length == 32 && keyEntry.HuBytes.Length == 16)
+            {
+                _keystream = NkxKeystream.CreateKeystream(keyEntry.JdxBytes, keyEntry.HuBytes);
+            }
+
+            _keystreamResolved = true;
+            return _keystream;
+        }
+    }
+
+    private NkxKeyEntry? ResolveKeyEntry()
+    {
+        string archiveBaseName = Path.GetFileNameWithoutExtension(_filePath);
+        string? archiveDir = Path.GetDirectoryName(_filePath);
+
+        // 1. Try finding .nicnt file in same directory or parent directory
+        if (!string.IsNullOrEmpty(archiveDir))
+        {
+            var candidateDirs = new List<string> { archiveDir };
+            string? parent = Path.GetDirectoryName(archiveDir);
+            if (!string.IsNullOrEmpty(parent))
+                candidateDirs.Add(parent);
+
+            foreach (var dir in candidateDirs)
+            {
+                string exactNicnt = Path.Combine(dir, archiveBaseName + ".nicnt");
+                if (File.Exists(exactNicnt))
+                {
+                    var entry = TryExtractKeyFromNicnt(exactNicnt);
+                    if (entry != null) return entry;
+                }
+
+                foreach (var nicnt in Directory.GetFiles(dir, "*.nicnt"))
+                {
+                    var entry = TryExtractKeyFromNicnt(nicnt);
+                    if (entry != null) return entry;
+                }
+            }
+        }
+
+        // 2. Try looking up in database by archive name
+        if (_keyDatabase.TryGetKey(archiveBaseName, out var foundEntry))
+            return foundEntry;
+
+        // 3. Try directory names
+        if (!string.IsNullOrEmpty(archiveDir))
+        {
+            string parentDirName = Path.GetFileName(archiveDir);
+            if (_keyDatabase.TryGetKey(parentDirName, out var dirEntry))
+                return dirEntry;
+
+            string? grandParent = Path.GetDirectoryName(archiveDir);
+            if (!string.IsNullOrEmpty(grandParent))
+            {
+                string grandParentName = Path.GetFileName(grandParent);
+                if (_keyDatabase.TryGetKey(grandParentName, out var grandEntry))
+                    return grandEntry;
+            }
+        }
+
+        return null;
+    }
+
+    private NkxKeyEntry? TryExtractKeyFromNicnt(string nicntPath)
+    {
+        try
+        {
+            using var fs = new FileStream(nicntPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            byte[] probe = new byte[64 * 1024];
+            int read = fs.Read(probe, 0, probe.Length);
+            string text = Encoding.UTF8.GetString(probe, 0, read);
+
+            int startIdx = text.IndexOf("<ProductHints", StringComparison.OrdinalIgnoreCase);
+            int endIdx = text.IndexOf("</ProductHints>", StringComparison.OrdinalIgnoreCase);
+            if (startIdx >= 0 && endIdx > startIdx)
+            {
+                endIdx += "</ProductHints>".Length;
+                string xml = text.Substring(startIdx, endIdx - startIdx);
+                var doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                string? hu = doc.SelectSingleNode("//HU")?.InnerText?.Trim();
+                string? jdx = doc.SelectSingleNode("//JDX")?.InnerText?.Trim();
+                string? snpid = doc.SelectSingleNode("//SNPID")?.InnerText?.Trim();
+                string? regKey = doc.SelectSingleNode("//RegKey")?.InnerText?.Trim() ?? doc.SelectSingleNode("//Name")?.InnerText?.Trim();
+                string? company = doc.SelectSingleNode("//Company")?.InnerText?.Trim();
+
+                if (!string.IsNullOrEmpty(hu) && !string.IsNullOrEmpty(jdx))
+                {
+                    return new NkxKeyEntry
+                    {
+                        Snpid = snpid ?? Path.GetFileNameWithoutExtension(nicntPath),
+                        JdxHex = jdx,
+                        HuHex = hu,
+                        RegKey = regKey ?? Path.GetFileNameWithoutExtension(nicntPath),
+                        Company = company ?? "Unknown"
+                    };
+                }
+
+                if (!string.IsNullOrEmpty(snpid) && _keyDatabase.TryGetKey(snpid, out var snpEntry))
+                    return snpEntry;
+
+                if (!string.IsNullOrEmpty(regKey) && _keyDatabase.TryGetKey(regKey, out var regEntry))
+                    return regEntry;
+            }
+        }
+        catch { }
+
+        return null;
+    }
+
     public Stream OpenEntryStream(ArchiveEntry entry)
     {
         _fileStream ??= new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024);
-        return new SubReadStream(_fileStream, entry.DataOffset, entry.Size);
+        var subStream = new SubReadStream(_fileStream, entry.DataOffset, entry.Size);
+
+        if (entry.IsEncrypted)
+        {
+            byte[]? keystream = GetOrCreateKeystream();
+            if (keystream == null)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot decrypt entry '{entry.RelativePath}'. Decryption key (HU/JDX) not found in nklibs.db or associated .nicnt file. " +
+                    $"Please run 'NkxTool update' to import keys from NativeAccess.xml or add the key to nklibs.db.");
+            }
+            return new NkxDecryptReadStream(subStream, keystream);
+        }
+
+        return subStream;
     }
 
     public async Task<ExtractionResult> ExtractAllAsync(
@@ -361,10 +543,24 @@ public sealed class NkxArchiveReader : IArchiveReader
                 using var sourceStream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, options.StreamBufferSize);
                 sourceStream.Seek(entry.DataOffset, SeekOrigin.Begin);
 
-                using var subStream = new SubReadStream(sourceStream, entry.DataOffset, entry.Size);
-                using var destStream = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous);
+                Stream readStream = new SubReadStream(sourceStream, entry.DataOffset, entry.Size);
+                if (entry.IsEncrypted)
+                {
+                    byte[]? keystream = GetOrCreateKeystream();
+                    if (keystream == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Cannot decrypt entry '{entry.RelativePath}'. Decryption key (HU/JDX) not found in nklibs.db or associated .nicnt file. " +
+                            $"Please run 'NkxTool update' to import keys from NativeAccess.xml or add the key to nklibs.db.");
+                    }
+                    readStream = new NkxDecryptReadStream(readStream, keystream);
+                }
 
-                await subStream.CopyToAsync(destStream, options.StreamBufferSize, ct).ConfigureAwait(false);
+                using (readStream)
+                using (var destStream = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous))
+                {
+                    await readStream.CopyToAsync(destStream, options.StreamBufferSize, ct).ConfigureAwait(false);
+                }
 
                 Interlocked.Increment(ref extracted);
             }
