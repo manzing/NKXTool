@@ -25,15 +25,27 @@ public sealed class NkxKeyDatabase
         if (File.Exists(modernPath)) return modernPath;
 
         string legacyPath = Path.Combine(baseDirectory, LegacyDbFileName);
-        if (File.Exists(legacyPath)) return legacyPath;
+        if (File.Exists(legacyPath))
+        {
+            // Convert / migrate legacy database to nklibs.db
+            try
+            {
+                File.Copy(legacyPath, modernPath, overwrite: false);
+                return modernPath;
+            }
+            catch
+            {
+                return legacyPath;
+            }
+        }
 
         return modernPath;
     }
 
-    public static NkxKeyDatabase Load(string? dbPath = null)
+    public static NkxKeyDatabase Load(string? dbPath = null, string? baseDirectory = null)
     {
         var db = new NkxKeyDatabase();
-        string resolvedPath = dbPath ?? ResolveDefaultDbPath();
+        string resolvedPath = dbPath ?? ResolveDefaultDbPath(baseDirectory);
 
         if (File.Exists(resolvedPath))
         {
@@ -41,6 +53,24 @@ public sealed class NkxKeyDatabase
         }
 
         return db;
+    }
+
+    /// <summary>
+    /// Saves the database entries to a specified file path in INI format.
+    /// </summary>
+    public void SaveFile(string path)
+    {
+        var sb = new StringBuilder();
+        foreach (var entry in _bySnpid.Values)
+        {
+            sb.AppendLine($"[{entry.Snpid}]");
+            sb.AppendLine($"JDX={entry.JdxHex}");
+            sb.AppendLine($"HU={entry.HuHex}");
+            sb.AppendLine($"RegKey={entry.RegKey}");
+            sb.AppendLine($"Company={entry.Company}");
+            sb.AppendLine();
+        }
+        File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
     }
 
     public bool TryGetKey(string snpidOrKey, out NkxKeyEntry? entry)

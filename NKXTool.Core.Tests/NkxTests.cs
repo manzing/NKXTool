@@ -17,6 +17,48 @@ public class NkxTests
     private const string BrassEnsembleRefNcw = @"C:\temp\test_v11_extract\Samples\FSSoloBrass_FrenchHorn_CLOSEStacRR1_1_41_A#1.ncw";
 
     [Fact]
+    public void TestLegacyDbAutoMigrationAndOnlyNklibsDbGenerated()
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "NKXTool_DbTest_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            string legacyPath = Path.Combine(tempDir, Cryptography.NkxKeyDatabase.LegacyDbFileName);
+            string modernPath = Path.Combine(tempDir, Cryptography.NkxKeyDatabase.DefaultDbFileName);
+
+            // 1. Create a legacy database file
+            File.WriteAllText(legacyPath, "[TST]\nJDX=0102030405060708091011121314151617181920212223242526272829303132\nHU=01020304050607080910111213141516\nRegKey=TestLib\nCompany=TestCo\n");
+
+            Assert.True(File.Exists(legacyPath));
+            Assert.False(File.Exists(modernPath));
+
+            // 2. Load with base directory pointing to tempDir -> should migrate legacy to modern
+            var db = Cryptography.NkxKeyDatabase.Load(null, tempDir);
+            Assert.Equal(1, db.Count);
+            Assert.True(db.TryGetKey("TST", out var entry));
+            Assert.NotNull(entry);
+            Assert.Equal("TestLib", entry.RegKey);
+
+            // Modern nklibs.db should now exist
+            Assert.True(File.Exists(modernPath));
+
+            // 3. Delete legacy file, load again from modern
+            File.Delete(legacyPath);
+            var db2 = Cryptography.NkxKeyDatabase.Load(null, tempDir);
+            Assert.True(db2.TryGetKey("TST", out var entry2));
+            Assert.NotNull(entry2);
+
+            // Legacy file must NOT be recreated
+            Assert.False(File.Exists(legacyPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TestOpenEntryStreamEncrypted()
     {
         if (!File.Exists(BrassEnsembleNkx)) return;

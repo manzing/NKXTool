@@ -269,16 +269,8 @@ public class Program
         {
             string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
             string dbPath = Path.Combine(exeDirectory, NkxKeyDatabase.DefaultDbFileName);
-            string legacyDbPath = Path.Combine(exeDirectory, NkxKeyDatabase.LegacyDbFileName);
 
             var (entryCount, duplicates, targetPath) = NkxKeyDatabase.UpdateFromNativeAccessXml(customXmlPath, dbPath);
-
-            // Keep legacy nklibs_info.userdb in sync for backwards compatibility
-            try
-            {
-                File.Copy(targetPath, legacyDbPath, overwrite: true);
-            }
-            catch { }
 
             Console.WriteLine($"Success. Generated database: {targetPath}");
             Console.WriteLine($"Total entries written: {entryCount} (including {duplicates} decimal/hex duplicates).");
