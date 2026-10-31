@@ -19,6 +19,8 @@ public sealed class NkxArchiveReader : IArchiveReader
     public const uint ChunkResourceDataMagic = 0x2ae905fa; // Pictures, fonts, text resources
     public const uint ChunkScriptDataMagic = 0x4916e63c; // Script data
 
+    public const uint FileRecordIdXorMask = 0x1F4E0C8D; // Directory record file ID XOR mask
+
     public const ushort VersionModern = 0x0110;
     public const ushort VersionModernEncrypted = 0x0111;
     public const ushort VersionLegacy = 0x0100;
@@ -154,7 +156,23 @@ public sealed class NkxArchiveReader : IArchiveReader
 
         foreach (var fileRec in fileRecords)
         {
-            stream.Seek(dataCur, SeekOrigin.Begin);
+            long chunkStartOffset = dataCur;
+            long maskedOffset = fileRec.id ^ FileRecordIdXorMask;
+            if (maskedOffset > 0 && maskedOffset < stream.Length - 22)
+            {
+                stream.Seek(maskedOffset, SeekOrigin.Begin);
+                byte[] probeBuf = new byte[4];
+                if (stream.Read(probeBuf, 0, 4) == 4)
+                {
+                    uint m = BinaryPrimitives.ReadUInt32LittleEndian(probeBuf);
+                    if (m == ChunkAudioDataMagic || m == ChunkResourceDataMagic || m == ChunkScriptDataMagic)
+                    {
+                        chunkStartOffset = maskedOffset;
+                    }
+                }
+            }
+
+            stream.Seek(chunkStartOffset, SeekOrigin.Begin);
             byte[] chunkProbe = new byte[32];
             int probeRead = stream.Read(chunkProbe, 0, 32);
             if (probeRead < 22) break;
@@ -209,13 +227,13 @@ public sealed class NkxArchiveReader : IArchiveReader
                 RelativePath = relativePath,
                 Size = itemSize,
                 PackedSize = itemSize,
-                DataOffset = dataCur + headerLen,
+                DataOffset = chunkStartOffset + headerLen,
                 IsDirectory = false,
                 IsEncrypted = isChunkEncrypted,
                 RawType = fileRec.type
             });
 
-            dataCur += headerLen + itemSize;
+            dataCur = chunkStartOffset + headerLen + itemSize;
         }
 
         // Subdirectories
