@@ -7,6 +7,11 @@ using System.Threading;
 using System.Xml;
 using System.Text.RegularExpressions;
 using NkiTool;
+using NKXTool.Core;
+using NKXTool.Core.Common;
+using NKXTool.Core.Cryptography;
+using NKXTool.Core.Containers.Nkx;
+
 public class Program
 {
     private const string PluginDllName = "inNKX.wcx64";
@@ -16,14 +21,15 @@ public class Program
     public const int PK_OM_EXTRACT = 1;
     public const int E_SUCCESS = 0;
     public const int E_END_ARCHIVE = 10;
-    // Formats supportés
+
+    // Supported formats
     private static readonly HashSet<string> SupportedArchiveExtensions =
-    new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        ".nkx", ".nkr", ".nicnt", ".nks"
-    };
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".nkx", ".nkr", ".nicnt", ".nks"
+        };
     
-    // --- STRUCTURES ---
+    // --- STRUCTURES (WCX Fallback) ---
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct tHeaderDataExW_WCXPlugin
     {
@@ -82,7 +88,7 @@ public class Program
     private static int OnProcessData(string FileName, int Size) { return 1; }
     private static int OnChangeVol(string ArcName, int Mode) { return 1; }
 
-    // --- IMPORTS ---
+    // --- IMPORTS (WCX Fallback) ---
     [DllImport(PluginDllName, CharSet = CharSet.Ansi)]
     private static extern void PackSetDefaultParams(ref PackDefaultParamStruct dps);
 
@@ -107,7 +113,6 @@ public class Program
     [DllImport(PluginDllName)]
     private static extern int CloseArchive(IntPtr hArc);
 
-
     private static string NormalizeArchivePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -123,16 +128,16 @@ public class Program
     {
         int exitCode = 1;
 
-    #pragma warning disable CA1416
-            Thread staThread = new Thread(() =>
-            {
-                exitCode = RunTool(args);
-            });
+#pragma warning disable CA1416
+        Thread staThread = new Thread(() =>
+        {
+            exitCode = RunTool(args);
+        });
 
-            staThread.SetApartmentState(ApartmentState.STA);
-            staThread.Start();
-            staThread.Join();
-    #pragma warning restore CA1416
+        staThread.SetApartmentState(ApartmentState.STA);
+        staThread.Start();
+        staThread.Join();
+#pragma warning restore CA1416
 
         return exitCode;
     }
@@ -140,11 +145,8 @@ public class Program
     private static int RunTool(string[] args)
     {
         string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        //Directory.SetCurrentDirectory(exeDirectory);
-
         List<string> argsList = new List<string>(args);
         
-        // Extraction du flag -y (pour l'écrasement dans unpack)
         bool overwrite = argsList.Remove("-y") || argsList.Remove("-Y");
 
         if (argsList.Count < 1)
@@ -155,11 +157,10 @@ public class Program
 
         string operation = argsList[0].ToLowerInvariant();
 
-        // Commande update avec option -f
+        // Update command
         if (operation == "update")
         {
             string? customXmlPath = null;
-
             int fIndex = argsList.IndexOf("-f");
             if (fIndex >= 0)
             {
@@ -182,7 +183,7 @@ public class Program
             return UpdateUserDb(customXmlPath);
         }
 
-        // Commande dump : diagnostic lecture seule d'un fichier NKI
+        // Dump command for NKI
         if (operation == "dump")
         {
             if (argsList.Count < 2)
@@ -207,6 +208,7 @@ public class Program
 
             return NkiDumpCommand.Run(nkiPath, outReport);
         }
+
         if (operation == "nki-infoscan")
         {
             if (argsList.Count < 2)
@@ -238,6 +240,7 @@ public class Program
 
             return NkiInfoScan.Run(nkiPath, scanLength, outReport);
         }
+
         if (operation == "nki-version")
         {
             if (argsList.Count < 2)
@@ -254,7 +257,6 @@ public class Program
             }
 
             bool verbose = argsList.Contains("-v") || argsList.Contains("--verbose");
-
             return NkiVersionCommand.Run(nkiPath, verbose);
         }
 
@@ -271,17 +273,6 @@ public class Program
             Console.WriteLine($"Error: The source file '{path1}' does not exist.");
             return 1;
         }
-
-        try
-        {
-            PackDefaultParamStruct dps = new PackDefaultParamStruct();
-            dps.size = Marshal.SizeOf(typeof(PackDefaultParamStruct));
-            dps.PluginInterfaceVersionLow = 1;
-            dps.PluginInterfaceVersionHi = 2;
-            dps.DefaultIniName = Path.Combine(exeDirectory, "inNKX.ini");
-            PackSetDefaultParams(ref dps);
-        }
-        catch { }
 
         try
         {
@@ -338,7 +329,7 @@ public class Program
         Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
-        Console.WriteLine("  NkxTool dump <fichier.nki> [--out rapport.txt]");
+        Console.WriteLine("  NkxTool dump <instrument.nki> [--out report.txt]");
         Console.WriteLine("  NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
         Console.WriteLine("  NkxTool nki-version <instrument.nki> [-v]");
         Console.WriteLine();
@@ -359,95 +350,28 @@ public class Program
         Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks");
     }
 
-    // --- METHODE UPDATE ---
+    // --- UPDATE KEY DATABASE ---
     private static int UpdateUserDb(string? customXmlPath = null)
     {
-        Console.WriteLine("Updating nklibs_info.userdb from NativeAccess.xml...");
-
-        string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        string dbPath = Path.Combine(exeDirectory, "nklibs_info.userdb");
-
-        string xmlPath;
-        if (!string.IsNullOrEmpty(customXmlPath))
-        {
-            xmlPath = customXmlPath;
-        }
-        else
-        {
-            string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
-            xmlPath = Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
-        }
-
-        if (!File.Exists(xmlPath))
-        {
-            Console.WriteLine($"Error: Could not find '{xmlPath}'");
-            return 1;
-        }
-
-        StringBuilder sb = new StringBuilder();
-        int entryCount = 0;
-        int duplicatedHexCount = 0;
+        Console.WriteLine("Updating nklibs.db from NativeAccess.xml...");
 
         try
         {
-            XmlDocument xmlDoc = new XmlDocument();
-            xmlDoc.Load(xmlPath);
-            XmlNodeList? productNodes = xmlDoc.SelectNodes("//Product");
+            string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            string dbPath = Path.Combine(exeDirectory, NkxKeyDatabase.DefaultDbFileName);
+            string legacyDbPath = Path.Combine(exeDirectory, NkxKeyDatabase.LegacyDbFileName);
 
-            if (productNodes != null)
+            var (entryCount, duplicates, targetPath) = NkxKeyDatabase.UpdateFromNativeAccessXml(customXmlPath, dbPath);
+
+            // Keep legacy nklibs_info.userdb in sync for backwards compatibility
+            try
             {
-                foreach (XmlNode node in productNodes)
-                {
-                    string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
-                    XmlNode? psNode = node.SelectSingleNode("ProductSpecific");
-
-                    if (string.IsNullOrEmpty(snpid) || psNode == null) continue;
-
-                    string? jdx = psNode.SelectSingleNode("JDX")?.InnerText?.Trim();
-                    string? hu = psNode.SelectSingleNode("HU")?.InnerText?.Trim();
-                    string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
-                    string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
-
-                    if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
-
-                    void AppendEntry(string id)
-                    {
-                        sb.AppendLine($"[{id}]");
-                        sb.AppendLine($"JDX={jdx}");
-                        sb.AppendLine($"HU={hu}");
-                        sb.AppendLine($"RegKey={regKey}");
-                        sb.AppendLine($"Company={company}");
-                        sb.AppendLine();
-                        entryCount++;
-                    }
-
-                    // 1. On écrit TOUJOURS la valeur brute originale (ex: "8H3", "224", "S65"...)
-                    AppendEntry(snpid);
-
-                    // 2. Si le SNPID est purement numérique, on calcule aussi sa forme
-                    //    hexadécimale sur 3 caractères (X3) et on l'ajoute si elle diffère
-                    //    de l'original -> couvre les deux interprétations possibles côté inNKX.
-                    if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
-                    {
-                        string hexSnpid = snpidInt.ToString("X3");
-
-                        if (hexSnpid != snpid)
-                        {
-                            AppendEntry(hexSnpid);
-                            duplicatedHexCount++;
-                        }
-                    }
-                }
+                File.Copy(targetPath, legacyDbPath, overwrite: true);
             }
+            catch { }
 
-            // Encodage ANSI (Windows-1252), requis par inNKX.wcx64 (plugin Delphi/C ancien).
-            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-            Encoding ansiEncoding = Encoding.GetEncoding(1252);
-
-            File.WriteAllText(dbPath, sb.ToString(), ansiEncoding);
-
-            Console.WriteLine($"Success. Generated file: {dbPath}");
-            Console.WriteLine($"Total entries written: {entryCount} (including {duplicatedHexCount} decimal/hex duplicates).");
+            Console.WriteLine($"Success. Generated database: {targetPath}");
+            Console.WriteLine($"Total entries written: {entryCount} (including {duplicates} decimal/hex duplicates).");
             return E_SUCCESS;
         }
         catch (Exception ex)
@@ -457,9 +381,41 @@ public class Program
         }
     }
 
+    // --- LIST ARCHIVE ---
     private static int ListArchive(string sourceNkxPath, string? outputListPath)
     {
-        // ... (code inchangé)
+        try
+        {
+            using var archive = NkxArchive.Open(sourceNkxPath);
+            var fileList = archive.Entries
+                .Where(e => !e.IsDirectory)
+                .Select(e => e.RelativePath)
+                .ToList();
+
+            if (!string.IsNullOrEmpty(outputListPath))
+            {
+                File.WriteAllLines(outputListPath, fileList, Encoding.UTF8);
+                Console.WriteLine($"List saved to: {outputListPath} ({fileList.Count} files)");
+            }
+            else
+            {
+                foreach (string file in fileList)
+                {
+                    Console.WriteLine(file);
+                }
+            }
+
+            return E_SUCCESS;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Native Engine fallback to WCX]: {ex.Message}");
+            return ListArchiveWcx(sourceNkxPath, outputListPath);
+        }
+    }
+
+    private static int ListArchiveWcx(string sourceNkxPath, string? outputListPath)
+    {
         tOpenArchiveDataW_WCXPlugin openArcData = new tOpenArchiveDataW_WCXPlugin { OpenMode = PK_OM_EXTRACT };
         IntPtr pArcName = Marshal.StringToHGlobalUni(sourceNkxPath);
         openArcData.ArcName = pArcName;
@@ -477,8 +433,7 @@ public class Program
             while (ReadHeaderExW(hArc, ref headerData) != E_END_ARCHIVE)
             {
                 string relativePath = headerData.hdFileNameW.Replace('/', Path.DirectorySeparatorChar);
-                
-                if ((headerData.hdFileAttr & 0x10) == 0) // N'ajouter que les fichiers
+                if ((headerData.hdFileAttr & 0x10) == 0)
                 {
                     fileList.Add(relativePath);
                 }
@@ -506,11 +461,44 @@ public class Program
         }
     }
 
+    // --- COMPRESS / PACK ---
     private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
     {
-        // ... (code inchangé)
-        string ext = Path.GetExtension(outputNkxFilePath);
+        try
+        {
+            var options = new NkxArchiveWriter.PackOptions
+            {
+                OutputFilePath = outputNkxFilePath,
+                SourcePathOrFileList = sourceOrList,
+                RootDirectoryName = string.IsNullOrEmpty(rootPath) ? null : rootPath
+            };
 
+            var result = NkxArchiveWriter.PackAsync(options).GetAwaiter().GetResult();
+            if (result.IsSuccess)
+            {
+                Console.WriteLine($"Success. Packed {result.TotalPackedFiles} file(s) ({result.TotalBytesPacked:N0} bytes) in {result.Elapsed.TotalSeconds:F2}s.");
+                foreach (var vol in result.VolumeFilePaths)
+                {
+                    Console.WriteLine($"  Created archive volume: {vol}");
+                }
+                return E_SUCCESS;
+            }
+            else
+            {
+                Console.WriteLine($"Packing completed with errors: {result.FailedFiles.Count} file(s) failed.");
+                return 1;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Native Engine fallback to WCX]: {ex.Message}");
+            return CompressFolderWcx(sourceOrList, outputNkxFilePath, rootPath);
+        }
+    }
+
+    private static int CompressFolderWcx(string sourceOrList, string outputNkxFilePath, string rootPath)
+    {
+        string ext = Path.GetExtension(outputNkxFilePath);
         if (string.IsNullOrWhiteSpace(ext))
         {
             outputNkxFilePath += ".nkx";
@@ -576,7 +564,6 @@ public class Program
         for (int i = 0; i < batches.Count; i++)
         {
             string batchOutputPath = outputNkxFilePath;
-            
             if (batches.Count > 1)
             {
                 string dir = Path.GetDirectoryName(outputNkxFilePath) ?? "";
@@ -624,7 +611,52 @@ public class Program
         return overallResult;
     }
 
+    // --- DECOMPRESS / UNPACK ---
     private static int DecompressArchive(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles, bool overwrite)
+    {
+        try
+        {
+            using var archive = NkxArchive.Open(sourceNkxPath);
+            var options = new ExtractionOptions
+            {
+                DestinationDirectory = destinationDirPath,
+                Overwrite = overwrite,
+                SelectedFiles = selectedFiles
+            };
+
+            var lastReport = DateTime.UtcNow;
+            var progress = new Progress<ExtractionProgress>(p =>
+            {
+                if ((DateTime.UtcNow - lastReport).TotalMilliseconds >= 200 || p.ProcessedFiles == p.TotalFiles)
+                {
+                    lastReport = DateTime.UtcNow;
+                    Console.Write($"\rUnpacking: {p.ProcessedFiles}/{p.TotalFiles} files ({p.PercentComplete:F1}%) - {p.CurrentFile}              ");
+                }
+            });
+
+            var result = archive.ExtractAllAsync(options, progress).GetAwaiter().GetResult();
+            Console.WriteLine();
+
+            if (result.Errors.Count > 0)
+            {
+                Console.WriteLine($"\nCompleted with {result.Errors.Count} error(s):");
+                foreach (var err in result.Errors)
+                {
+                    Console.WriteLine($"  [File #{err.FileId}] {err.ArchivePath}: {err.ErrorMessage}");
+                }
+            }
+
+            Console.WriteLine($"Success. Extracted {result.ExtractedCount}/{result.TotalCount} file(s) in {result.Elapsed.TotalSeconds:F2}s ({result.SkippedCount} skipped).");
+            return result.IsSuccess ? E_SUCCESS : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Native Engine fallback to WCX]: {ex.Message}");
+            return DecompressArchiveWcx(sourceNkxPath, destinationDirPath, selectedFiles, overwrite);
+        }
+    }
+
+    private static int DecompressArchiveWcx(string sourceNkxPath, string destinationDirPath, HashSet<string>? selectedFiles, bool overwrite)
     {
         Directory.CreateDirectory(destinationDirPath);
         
@@ -659,7 +691,6 @@ public class Program
                 
                 if ((headerData.hdFileAttr & 0x10) != 0)
                 {
-                    // C'est un dossier, on l'ignore (le plugin avance le curseur)
                     ProcessFileW(hArc, PK_SKIP, null, null);
                     continue;
                 }
@@ -678,7 +709,6 @@ public class Program
                 if (!string.IsNullOrEmpty(fullDestDir))
                     Directory.CreateDirectory(fullDestDir);
 
-                // --- GESTION DE LA COLLISION ---
                 if (!overwrite && File.Exists(fullDestPath))
                 {
                     Console.WriteLine($"Skipping (already exists): {relativePath}");
