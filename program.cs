@@ -215,7 +215,7 @@ public class Program
             }
             else if (operation == "pack" && argsList.Count >= 3)
             {
-                string rootPath = argsList.Count >= 4 ? Path.GetFullPath(argsList[3]) : "";
+                string rootPath = argsList.Count >= 4 ? argsList[3].Trim() : "";
                 return CompressFolder(argsList[2], path1, rootPath);
             }
             else
@@ -321,11 +321,19 @@ public class Program
     {
         try
         {
+            string? rootDirName = null;
+            if (!string.IsNullOrWhiteSpace(rootPath))
+            {
+                rootDirName = Path.GetFileName(rootPath.TrimEnd('\\', '/'));
+                if (string.IsNullOrEmpty(rootDirName))
+                    rootDirName = rootPath;
+            }
+
             var options = new NkxArchiveWriter.PackOptions
             {
                 OutputFilePath = outputNkxFilePath,
                 SourcePathOrFileList = sourceOrList,
-                RootDirectoryName = string.IsNullOrEmpty(rootPath) ? null : rootPath
+                RootDirectoryName = rootDirName
             };
 
             var result = NkxArchiveWriter.PackAsync(options).GetAwaiter().GetResult();

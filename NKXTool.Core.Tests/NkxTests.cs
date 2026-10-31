@@ -15,6 +15,30 @@ public class NkxTests
     private const string BrassEnsembleNkx = @"C:\temp\source\Brass Ensemble\Samples\Brass Ensemble.nkx";
     private const string BrassEnsembleNkr = @"C:\temp\source\Brass Ensemble\Samples\BP Brass Ensemble.nkr";
     private const string BrassEnsembleRefNcw = @"C:\temp\test_v11_extract\Samples\FSSoloBrass_FrenchHorn_CLOSEStacRR1_1_41_A#1.ncw";
+    private const string ThePulseProcessedNkx = @"C:\Dev\AI-Workspaces\REA\innkx\Kontakt_files\The Pulse_1_processed.nkx";
+
+    [Fact]
+    public void TestOpenThePulseProcessedNkx()
+    {
+        if (!File.Exists(ThePulseProcessedNkx)) return;
+
+        using var archive = NkxArchive.Open(ThePulseProcessedNkx);
+        Assert.Equal(ArchiveType.Nkx, archive.ArchiveType);
+        Assert.Equal(378, archive.Entries.Count(e => !e.IsDirectory));
+        Assert.Contains(archive.Entries, e => e.RelativePath == @"Samples\SusAirySynthf_C3.ncw");
+
+        var entry = archive.Entries.First(e => !e.IsDirectory);
+        using var stream = archive.OpenEntryStream(entry);
+        byte[] magic = new byte[8];
+        int read = stream.Read(magic, 0, 8);
+        Assert.Equal(8, read);
+        Assert.Equal((byte)0x01, magic[0]);
+        Assert.Equal((byte)0xa8, magic[1]);
+        Assert.Equal((byte)0x9e, magic[2]);
+        Assert.Equal((byte)0xd6, magic[3]);
+        Assert.Equal((byte)0x31, magic[4]);
+        Assert.Equal((byte)0x01, magic[5]);
+    }
 
     [Fact]
     public void TestLegacyDbAutoMigrationAndOnlyNklibsDbGenerated()

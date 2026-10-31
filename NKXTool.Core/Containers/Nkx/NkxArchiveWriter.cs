@@ -7,6 +7,7 @@ using NKXTool.Core.Common;
 
 /// <summary>
 /// High-performance native generator and packer for Kontakt containers (.nkx).
+/// Generates 100% standards-compliant modern Kontakt container chunks (0x5e70ac54, 0x16ccf80a).
 /// Supports automatic multi-volume splitting at configurable size boundaries (default ~1.95 GB).
 /// </summary>
 public static class NkxArchiveWriter
@@ -21,6 +22,7 @@ public static class NkxArchiveWriter
         public string OutputFilePath { get; set; } = string.Empty;
         public string SourcePathOrFileList { get; set; } = string.Empty;
         public string? RootDirectoryName { get; set; }
+        public string? SourceBaseDirectory { get; set; }
         public long MaxVolumeSize { get; set; } = DefaultMaxVolumeBytes;
         public int StreamBufferSize { get; set; } = 1024 * 1024;
     }
@@ -53,7 +55,7 @@ public static class NkxArchiveWriter
         if (!string.IsNullOrEmpty(outDir))
             Directory.CreateDirectory(outDir);
 
-        // 1. Resolve source files
+        // 1. Resolve source files and base path
         var filesToPack = new List<string>();
         string srcBasePath;
 
@@ -63,9 +65,9 @@ public static class NkxArchiveWriter
             if (!File.Exists(listFile))
                 throw new FileNotFoundException($"Filelist file not found: {listFile}", listFile);
 
-            srcBasePath = string.IsNullOrEmpty(options.RootDirectoryName)
-                ? Path.GetDirectoryName(Path.GetFullPath(listFile)) ?? ""
-                : options.RootDirectoryName;
+            srcBasePath = !string.IsNullOrEmpty(options.SourceBaseDirectory)
+                ? Path.GetFullPath(options.SourceBaseDirectory)
+                : Path.GetDirectoryName(Path.GetFullPath(listFile)) ?? "";
 
             foreach (var line in File.ReadAllLines(listFile))
             {
@@ -132,23 +134,60 @@ public static class NkxArchiveWriter
             }
 
             var batchFiles = batches[b];
+
+            // Determine rootFolder name (e.g. "Samples" or "Resources")
             string rootFolder = "Samples";
+            if (!string.IsNullOrWhiteSpace(options.RootDirectoryName))
+            {
+                rootFolder = options.RootDirectoryName;
+            }
+            else
+            {
+                string? commonPrefix = null;
+                foreach (var f in batchFiles)
+                {
+                    int slashIdx = f.IndexOfAny(['\\', '/']);
+                    if (slashIdx > 0)
+                    {
+                        string prefix = f.Substring(0, slashIdx);
+                        if (commonPrefix == null)
+                            commonPrefix = prefix;
+                        else if (!string.Equals(commonPrefix, prefix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            commonPrefix = null;
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        commonPrefix = null;
+                        break;
+                    }
+                }
+                if (!string.IsNullOrEmpty(commonPrefix))
+                {
+                    rootFolder = commonPrefix;
+                }
+            }
 
             using var outStream = new FileStream(volumePath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous);
 
             // 1. Root Chunk Header (Magic: 0x5e70ac54, Version: 0x0110)
             byte[] rootNameBytes = Encoding.Unicode.GetBytes(rootFolder + "\0");
             uint dirOffset = (uint)(0x1e + rootNameBytes.Length);
+            ushort remainingHdrLen = (ushort)(dirOffset - 0x16);
 
             byte[] rootHdr = new byte[dirOffset];
             BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(0, 4), NkxArchiveReader.ChunkContainerMagic);
-            BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(4, 4), NkxArchiveReader.VersionModern);
+            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(4, 2), NkxArchiveReader.VersionModern);
+            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(6, 2), 0);
             BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(8, 4), 0x00ff0000);
             BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(12, 4), 0x00010000);
-            BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(16, 4), 0x00000001);
-            BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(20, 4), 0x00000001);
+            BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(16, 4), 0x00010000);
+            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(20, 2), 0);
+            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(22, 2), remainingHdrLen);
             BinaryPrimitives.WriteUInt32LittleEndian(rootHdr.AsSpan(24, 4), dirOffset);
-            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(28, 2), 1); // type directory
+            BinaryPrimitives.WriteUInt16LittleEndian(rootHdr.AsSpan(28, 2), 1); // type = 1 (Directory)
             rootNameBytes.CopyTo(rootHdr.AsSpan(30));
 
             await outStream.WriteAsync(rootHdr, cancellationToken).ConfigureAwait(false);
@@ -156,17 +195,27 @@ public static class NkxArchiveWriter
             // 2. Directory Chunk Header (22 bytes)
             byte[] dirHdr = new byte[22];
             BinaryPrimitives.WriteUInt32LittleEndian(dirHdr.AsSpan(0, 4), NkxArchiveReader.ChunkContainerMagic);
-            BinaryPrimitives.WriteUInt32LittleEndian(dirHdr.AsSpan(4, 4), NkxArchiveReader.VersionModern);
+            BinaryPrimitives.WriteUInt16LittleEndian(dirHdr.AsSpan(4, 2), NkxArchiveReader.VersionModern);
+            BinaryPrimitives.WriteUInt16LittleEndian(dirHdr.AsSpan(6, 2), 0);
             BinaryPrimitives.WriteUInt32LittleEndian(dirHdr.AsSpan(8, 4), 0x00ff0000);
+            BinaryPrimitives.WriteUInt16LittleEndian(dirHdr.AsSpan(12, 2), 0);
             BinaryPrimitives.WriteUInt16LittleEndian(dirHdr.AsSpan(14, 2), (ushort)batchFiles.Count);
+            // Remaining 6 bytes at 16..21 are 0
 
             await outStream.WriteAsync(dirHdr, cancellationToken).ConfigureAwait(false);
 
-            // Directory Records
+            // 3. Directory Records
             uint fileIdCounter = 1;
             foreach (var relFile in batchFiles)
             {
-                byte[] nameUtf16 = Encoding.Unicode.GetBytes(relFile + "\0");
+                string cleanName = relFile;
+                if (cleanName.StartsWith(rootFolder + "\\", StringComparison.OrdinalIgnoreCase) ||
+                    cleanName.StartsWith(rootFolder + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    cleanName = cleanName.Substring(rootFolder.Length + 1);
+                }
+
+                byte[] nameUtf16 = Encoding.Unicode.GetBytes(cleanName + "\0");
                 ushort recLen = (ushort)(2 + 4 + 2 + nameUtf16.Length);
 
                 byte[] recBuf = new byte[recLen];
@@ -178,7 +227,7 @@ public static class NkxArchiveWriter
                 await outStream.WriteAsync(recBuf, cancellationToken).ConfigureAwait(false);
             }
 
-            // 3. Sequential File Data Chunks (Magic: 0x16ccf80a)
+            // 4. Sequential File Data Chunks (Magic: 0x16ccf80a, 31 bytes header)
             foreach (var relFile in batchFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -191,9 +240,14 @@ public static class NkxArchiveWriter
 
                     byte[] chunkHdr = new byte[31];
                     BinaryPrimitives.WriteUInt32LittleEndian(chunkHdr.AsSpan(0, 4), NkxArchiveReader.ChunkAudioDataMagic);
-                    BinaryPrimitives.WriteUInt32LittleEndian(chunkHdr.AsSpan(4, 4), NkxArchiveReader.VersionModern);
-                    BinaryPrimitives.WriteUInt32LittleEndian(chunkHdr.AsSpan(8, 4), 3); // type 3
+                    BinaryPrimitives.WriteUInt16LittleEndian(chunkHdr.AsSpan(4, 2), NkxArchiveReader.VersionModern);
+                    BinaryPrimitives.WriteUInt16LittleEndian(chunkHdr.AsSpan(6, 2), 0);
+                    BinaryPrimitives.WriteUInt32LittleEndian(chunkHdr.AsSpan(8, 4), 0x00ff0000);
+                    BinaryPrimitives.WriteUInt16LittleEndian(chunkHdr.AsSpan(12, 2), 0);
+                    chunkHdr[14] = 0x03; // Chunk type 3 (Audio data)
+                    // Offset 15..18 are 0
                     BinaryPrimitives.WriteUInt64LittleEndian(chunkHdr.AsSpan(19, 8), (ulong)fileLen);
+                    // Offset 27..30 are 0
 
                     await outStream.WriteAsync(chunkHdr, cancellationToken).ConfigureAwait(false);
                     await inStream.CopyToAsync(outStream, options.StreamBufferSize, cancellationToken).ConfigureAwait(false);
