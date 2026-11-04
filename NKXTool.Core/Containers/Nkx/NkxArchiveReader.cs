@@ -391,6 +391,8 @@ public sealed class NkxArchiveReader : IArchiveReader
             if (!string.IsNullOrEmpty(parent))
                 candidateDirs.Add(parent);
 
+            string cleanBase = System.Text.RegularExpressions.Regex.Replace(archiveBaseName, @"[_\s]*(?:part|\d)+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
             foreach (var dir in candidateDirs)
             {
                 string exactNicnt = Path.Combine(dir, archiveBaseName + ".nicnt");
@@ -400,10 +402,25 @@ public sealed class NkxArchiveReader : IArchiveReader
                     if (entry != null) return entry;
                 }
 
+                if (!string.IsNullOrEmpty(cleanBase) && !cleanBase.Equals(archiveBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    string candidateNicnt = Path.Combine(dir, cleanBase + ".nicnt");
+                    if (File.Exists(candidateNicnt))
+                    {
+                        var entry = TryExtractKeyFromNicnt(candidateNicnt);
+                        if (entry != null) return entry;
+                    }
+                }
+
                 foreach (var nicnt in Directory.GetFiles(dir, "*.nicnt"))
                 {
-                    var entry = TryExtractKeyFromNicnt(nicnt);
-                    if (entry != null) return entry;
+                    string nicntBase = Path.GetFileNameWithoutExtension(nicnt);
+                    if (nicntBase.Equals(archiveBaseName, StringComparison.OrdinalIgnoreCase) ||
+                        (!string.IsNullOrEmpty(cleanBase) && nicntBase.Equals(cleanBase, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var entry = TryExtractKeyFromNicnt(nicnt);
+                        if (entry != null) return entry;
+                    }
                 }
             }
         }
