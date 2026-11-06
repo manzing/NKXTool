@@ -1,7 +1,8 @@
 {
   "version": 4,
   "targets": {
-    "net10.0": {}
+    "net10.0": {},
+    "net10.0/win-x64": {}
   },
   "libraries": {},
   "projectFileDependencyGroups": {
@@ -11,7 +12,7 @@
     "C:\\Users\\man\\.nuget\\packages\\": {}
   },
   "project": {
-    "version": "1.0.0",
+    "version": "2.0.0",
     "restore": {
       "projectUniqueName": "D:\\Docs\\GitHub\\NKXTool\\NKXTool.Core\\NKXTool.Core.csproj",
       "projectName": "NKXTool.Core",
@@ -342,6 +343,11 @@
           "System.Xml.XPath": "(,4.3.32767]",
           "System.Xml.XPath.XDocument": "(,5.0.32767]"
         }
+      }
+    },
+    "runtimes": {
+      "win-x64": {
+        "#import": []
       }
     }
   }
