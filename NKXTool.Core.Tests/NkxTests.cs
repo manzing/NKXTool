@@ -16,6 +16,9 @@ public class NkxTests
     private const string BrassEnsembleNkr = @"C:\temp\source\Brass Ensemble\Samples\BP Brass Ensemble.nkr";
     private const string BrassEnsembleRefNcw = @"C:\temp\test_v11_extract\Samples\FSSoloBrass_FrenchHorn_CLOSEStacRR1_1_41_A#1.ncw";
     private const string ThePulseProcessedNkx = @"C:\Dev\AI-Workspaces\REA\innkx\Kontakt_files\The Pulse_1_processed.nkx";
+    private const string PlainModernVersionNkr = @"G:\Libs\All Saints Choir LiTE\Samples\SC All Saints Choir.nkr";
+    private const string EmbertoneMonolithNkx = @"G:\Libs\Embertone - Joshua Bell Violin\Samples\Contour.nkx";
+    private const string LegacyEncryptedNks = @"D:\Apps\Musique\Librairies\EWQLSO Gold Edition\EWQLSO Gold Library\EWQLSO_Gold_lib_part8.nks";
 
     [Fact]
     public void TestOpenThePulseProcessedNkx()
@@ -38,6 +41,61 @@ public class NkxTests
         Assert.Equal((byte)0xd6, magic[3]);
         Assert.Equal((byte)0x31, magic[4]);
         Assert.Equal((byte)0x01, magic[5]);
+    }
+
+    [Fact]
+    public void TestMonolithContainerWithProprietaryPrologue()
+    {
+        // Embertone monoliths start with a proprietary sample header (0x7FA89012) instead of the
+        // standard root header: the root directory chunk sits at offset 222 and the records hold
+        // absolute chunk offsets, regular files being stored with an unmasked offset.
+        if (!File.Exists(EmbertoneMonolithNkx)) return;
+
+        using var archive = NkxArchive.Open(EmbertoneMonolithNkx);
+
+        var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
+        Assert.Equal(121, entries.Count);
+        Assert.Contains(entries, e => e.RelativePath == "Contour.nki");
+        Assert.Contains(entries, e => e.RelativePath == @"Samples\JBell_CLOSE.CrescLong_A2_MP-F_rr1.ncw");
+
+        // The patch is stored as a regular (unmasked) file chunk right before the trailing block.
+        var patch = entries.First(e => e.RelativePath == "Contour.nki");
+        Assert.Equal(5629, patch.Size);
+
+        using var patchStream = archive.OpenEntryStream(patch);
+        byte[] patchHead = new byte[4];
+        Assert.Equal(4, patchStream.Read(patchHead, 0, 4));
+        Assert.Equal(new byte[] { 0x12, 0x90, 0xa8, 0x7f }, patchHead);
+
+        // Samples are stored in clear: the NCW header is copied verbatim.
+        var sample = entries.First(e => e.RelativePath.EndsWith(".ncw", StringComparison.OrdinalIgnoreCase));
+        Assert.True(sample.Size > 1024);
+        using var sampleStream = archive.OpenEntryStream(sample);
+        byte[] sampleHead = new byte[4];
+        Assert.Equal(4, sampleStream.Read(sampleHead, 0, 4));
+        Assert.Equal(new byte[] { 0x01, 0xa8, 0x9e, 0xd6 }, sampleHead);
+    }
+
+    [Fact]
+    public void TestLegacyContainerWithStaticKey()
+    {
+        // Kontakt 1 monolith: fixed-size Latin1 directory records, samples protected with static key 9.
+        if (!File.Exists(LegacyEncryptedNks)) return;
+
+        using var archive = NkxArchive.Open(LegacyEncryptedNks);
+
+        var entries = archive.Entries.Where(e => !e.IsDirectory).ToList();
+        Assert.Equal(811, entries.Count);
+
+        var sample = entries.First(e => e.RelativePath == @"CBScrF F\CBScrF24 F.wav");
+        Assert.True(sample.IsEncrypted);
+        Assert.Equal(9, sample.KeyIndex);
+
+        using var stream = archive.OpenEntryStream(sample);
+        byte[] head = new byte[16];
+        Assert.Equal(16, stream.Read(head, 0, 16));
+        Assert.Equal(new byte[] { 0x52, 0x49, 0x46, 0x46 }, head[..4]);  // "RIFF"
+        Assert.Equal(new byte[] { 0x57, 0x41, 0x56, 0x45 }, head[8..12]); // "WAVE"
     }
 
     [Fact]
@@ -175,6 +233,23 @@ public class NkxTests
             if (Directory.Exists(outDir))
                 Directory.Delete(outDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void TestModernVersionContainerWithoutKeyIdIsNotEncrypted()
+    {
+        if (!File.Exists(PlainModernVersionNkr)) return;
+
+        using var opened = NkxArchive.Open(PlainModernVersionNkr);
+        var archive = Assert.IsType<Containers.Nkx.NkxArchiveReader>(opened);
+        Assert.Equal(ArchiveType.Nkr, archive.ArchiveType);
+        Assert.False(archive.IsEncrypted);
+
+        var textEntry = archive.Entries.First(e => !e.IsDirectory && e.RelativePath.EndsWith(".txt", StringComparison.OrdinalIgnoreCase));
+        using var stream = archive.OpenEntryStream(textEntry);
+        using var textReader = new StreamReader(stream, Encoding.UTF8);
+        string text = textReader.ReadToEnd();
+        Assert.StartsWith("Has Alpha Channel:", text);
     }
 
     [Fact]

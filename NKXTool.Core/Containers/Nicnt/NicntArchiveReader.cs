@@ -145,8 +145,7 @@ public sealed class NicntArchiveReader : IArchiveReader
         {
             long payloadBaseOffset = toc2Offset + ResourcePayloadHeaderOffset;
             long currentRecordOffset = toc1Offset + 0x268; // first record starts at +0x268
-
-            var tocEntries = new List<(long relOffset, int id, string relName)>();
+            long currentStartOffset = 0;
 
             while (currentRecordOffset + TocRecordSize <= toc2Offset + 16)
             {
@@ -155,50 +154,45 @@ public sealed class NicntArchiveReader : IArchiveReader
                 int recRead = stream.Read(recBuf, 0, TocRecordSize);
                 if (recRead < TocRecordSize) break;
 
-                // Check if slot has data
-                long relOffset = BitConverter.ToInt64(recBuf, 0);
-                int recId = BitConverter.ToInt32(recBuf, 8);
+                // Stop if end-of-records marker (0xF1) is reached
+                if (recBuf[0] == 0xF1) break;
+
+                long recId = BitConverter.ToInt64(recBuf, 0);
                 string rawName = ReadNullTerminatedUtf16(recBuf.AsSpan(24));
+                long endOffset = BitConverter.ToInt64(recBuf, TocRecordSize - 8);
 
                 if (!string.IsNullOrWhiteSpace(rawName))
                 {
                     // Translate '|' to '[pipe]'
                     string safeName = rawName.Replace("|", "[pipe]");
                     string archiveRelPath = Path.Combine("Resources", safeName);
-                    tocEntries.Add((relOffset, recId, archiveRelPath));
+
+                    long itemStart = currentStartOffset;
+                    long itemSize;
+                    if (endOffset > currentStartOffset)
+                    {
+                        itemSize = endOffset - currentStartOffset;
+                        currentStartOffset = endOffset;
+                    }
+                    else
+                    {
+                        itemSize = 0;
+                    }
+
+                    _entries.Add(new ArchiveEntry
+                    {
+                        Id = entryId++,
+                        RelativePath = archiveRelPath,
+                        Size = itemSize,
+                        PackedSize = itemSize,
+                        DataOffset = payloadBaseOffset + itemStart,
+                        IsDirectory = false,
+                        IsEncrypted = false,
+                        RawType = 2
+                    });
                 }
 
                 currentRecordOffset += TocRecordSize;
-            }
-
-            // Calculate exact sizes between sequential relative offsets
-            for (int i = 0; i < tocEntries.Count; i++)
-            {
-                var cur = tocEntries[i];
-                long itemSize;
-                if (i + 1 < tocEntries.Count)
-                {
-                    itemSize = tocEntries[i + 1].relOffset - cur.relOffset;
-                }
-                else
-                {
-                    // Last item runs to end of container
-                    itemSize = fileSize - (payloadBaseOffset + cur.relOffset);
-                }
-
-                if (itemSize < 0) itemSize = 0;
-
-                _entries.Add(new ArchiveEntry
-                {
-                    Id = entryId++,
-                    RelativePath = cur.relName,
-                    Size = itemSize,
-                    PackedSize = itemSize,
-                    DataOffset = payloadBaseOffset + cur.relOffset,
-                    IsDirectory = false,
-                    IsEncrypted = false,
-                    RawType = 2
-                });
             }
         }
     }

@@ -10,6 +10,12 @@ public static class NkxKeystream
 {
     public const int KeystreamSize = 0x10000; // 65,536 bytes (64 KB)
 
+    /// <summary>Number of static keys available to legacy (version 0x0100) containers.</summary>
+    public const int LegacyKeyCount = 32;
+
+    /// <summary>Seed of the legacy static key table.</summary>
+    public const uint LegacyKeySeed = 0x6EE38FE0;
+
     /// <summary>
     /// Generates the 64 KB keystream using JDX (32-byte AES key) and HU (16-byte initial counter).
     /// </summary>
@@ -59,6 +65,36 @@ public static class NkxKeystream
         }
 
         return keystream;
+    }
+
+    /// <summary>
+    /// Generates one of the 32 static 16-byte keys used by legacy (version 0x0100) containers.
+    /// The whole table is derived from a single MSVC CRT LCG stream, so a key can only be produced
+    /// by walking the stream up to its index.
+    /// </summary>
+    /// <param name="keyIndex">Key index stored in the chunk header (0 to 0x1F).</param>
+    public static byte[] CreateLegacyKey(int keyIndex)
+    {
+        if (keyIndex < 0 || keyIndex > LegacyKeyCount - 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(keyIndex), keyIndex, $"Legacy key index must be between 0 and {LegacyKeyCount - 1}.");
+        }
+
+        byte[] key = new byte[16];
+        uint seed = LegacyKeySeed;
+
+        for (int index = 0; index <= keyIndex; index++)
+        {
+            for (int n = 0; n < key.Length; n++)
+            {
+                seed = unchecked(seed * 0x343FD + 0x269EC3);
+                if (index == keyIndex)
+                    key[n] = (byte)(seed >> 16);
+            }
+        }
+
+        return key;
     }
 
     /// <summary>

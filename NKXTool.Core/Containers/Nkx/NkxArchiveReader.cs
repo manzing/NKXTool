@@ -8,22 +8,40 @@ using NKXTool.Core.Common;
 using NKXTool.Core.Cryptography;
 
 /// <summary>
-/// High-performance native reader and extractor for Kontakt containers (.nkx, .nkr, .nks).
+/// High-performance native reader and extractor for Kontakt containers (.nkx, .nkr, .nks and the
+/// monolith patch containers .nki/.nkm/.nkb/.nkg).
 /// Supports modern containers (0x0110, 0x0111, 0x0401) with recursive directory chunk trees,
-/// automatic transparent AES-256 CTR / LCG decryption, and legacy NKS (0x0100).
+/// monoliths prefixed by a proprietary sample header, legacy 0x0100 containers (fixed-size Latin1
+/// records, optional static keys), and automatic transparent AES-256 CTR / LCG decryption.
 /// </summary>
 public sealed class NkxArchiveReader : IArchiveReader
 {
     public const uint ChunkContainerMagic = 0x5e70ac54; // Big chunk: root and directory tree
-    public const uint ChunkAudioDataMagic = 0x16ccf80a; // Audio sample data
+    public const uint ChunkAudioDataMagic = 0x16ccf80a; // Audio sample data (encrypted file chunk)
     public const uint ChunkResourceDataMagic = 0x2ae905fa; // Pictures, fonts, text resources
-    public const uint ChunkScriptDataMagic = 0x4916e63c; // Script data
+    public const uint ChunkScriptDataMagic = 0x4916e63c; // Script data (plain file chunk)
 
     public const uint FileRecordIdXorMask = 0x1F4E0C8D; // Directory record file ID XOR mask
 
     public const ushort VersionModern = 0x0110;
     public const ushort VersionModernEncrypted = 0x0111;
     public const ushort VersionLegacy = 0x0100;
+
+    /// <summary>Key index of a payload that is stored in clear.</summary>
+    public const int KeyIndexNone = 0xFF;
+
+    /// <summary>Highest key index of the static key table used by legacy (0x0100) containers.</summary>
+    public const int LegacyKeyIndexMax = 0x1F;
+
+    /// <summary>
+    /// Size of a legacy (0x0100) directory record: a 128-character Latin1 name padded with zeros,
+    /// one unused byte, a 32-bit offset and a 16-bit type hint.
+    /// </summary>
+    private const int LegacyRecordStride = 135;
+
+    private const ushort RecordTypeDirectory = 1;
+    private const ushort RecordTypeEncryptedFile = 2;
+    private const ushort RecordTypeFile = 3;
 
     private readonly string _filePath;
     private readonly ArchiveType _archiveType;
@@ -32,7 +50,6 @@ public sealed class NkxArchiveReader : IArchiveReader
     private FileStream? _fileStream;
     private int _nextEntryId = 1;
     private bool _isContainerEncrypted;
-    private ushort _containerKeyId;
 
     private byte[]? _keystream;
     private bool _keystreamResolved;
@@ -76,27 +93,41 @@ public sealed class NkxArchiveReader : IArchiveReader
         ushort version = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(4, 2));
         ushort keyId = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(6, 2));
 
-        if (magic != ChunkContainerMagic)
-            throw new InvalidDataException($"Unsupported archive magic: 0x{magic:X8} (expected 0x{ChunkContainerMagic:X8}).");
+        if (magic == ChunkContainerMagic)
+        {
+            // Encryption is signalled by the key id, not by the version: containers of version 0x0111
+            // with key id 0 store their payloads in clear (e.g. All Saints Choir LiTE, Amati Viola).
+            // Treating those as encrypted XORs the keystream onto plaintext and silently corrupts output.
+            _isContainerEncrypted = keyId != 0;
 
-        _isContainerEncrypted = (version == VersionModernEncrypted || keyId != 0);
-        _containerKeyId = keyId;
+            if (version == VersionLegacy)
+            {
+                // Legacy containers hold their whole directory tree from offset 0 and use
+                // fixed-size, Latin1 directory records.
+                ParseDirectoryRecursive(stream, 0, string.Empty, version);
+            }
+            else
+            {
+                ParseModernContainer(stream, version);
+            }
 
-        if (version == VersionModern || version == VersionModernEncrypted || version == 0x0401)
-        {
-            ParseModernContainer(stream);
+            return;
         }
-        else if (version == VersionLegacy)
+
+        // Some libraries ship monolith containers whose file begins with a proprietary sample
+        // header (magic 0x7FA89012 for Embertone, for instance) followed by the root directory
+        // chunk at an absolute offset, without the usual 64-byte root header.
+        long embeddedRoot = FindEmbeddedRootDirectory(stream);
+        if (embeddedRoot >= 0)
         {
-            ParseLegacyContainer(stream);
+            ParseDirectoryRecursive(stream, embeddedRoot, string.Empty, VersionModern);
+            return;
         }
-        else
-        {
-            ParseModernContainer(stream);
-        }
+
+        throw new InvalidDataException($"Unsupported archive magic: 0x{magic:X8} (expected 0x{ChunkContainerMagic:X8}).");
     }
 
-    private void ParseModernContainer(FileStream stream)
+    private void ParseModernContainer(FileStream stream, ushort version)
     {
         // 1. Root Chunk: read root directory name and pointer to first directory chunk
         stream.Seek(0, SeekOrigin.Begin);
@@ -111,12 +142,12 @@ public sealed class NkxArchiveReader : IArchiveReader
             rootName = Encoding.Unicode.GetString(rootHdr.AsSpan(0x1e, rootNameByteLen)).TrimEnd('\0');
         }
 
-        ParseDirectoryRecursive(stream, dirChunkOffset, rootName);
+        ParseDirectoryRecursive(stream, dirChunkOffset, rootName, version);
     }
 
-    private long ParseDirectoryRecursive(FileStream stream, long chunkOffset, string currentPath)
+    private long ParseDirectoryRecursive(FileStream stream, long chunkOffset, string currentPath, ushort version)
     {
-        if (chunkOffset >= stream.Length) return chunkOffset;
+        if (chunkOffset < 0 || chunkOffset >= stream.Length) return chunkOffset;
 
         stream.Seek(chunkOffset, SeekOrigin.Begin);
         byte[] dirHdr = new byte[22];
@@ -127,50 +158,35 @@ public sealed class NkxArchiveReader : IArchiveReader
         if (dirMagic != ChunkContainerMagic)
             return chunkOffset;
 
-        ushort entryCount = BinaryPrimitives.ReadUInt16LittleEndian(dirHdr.AsSpan(14, 2));
+        // The entry count is a 32-bit field in both layouts.
+        uint entryCount = BinaryPrimitives.ReadUInt32LittleEndian(dirHdr.AsSpan(14, 4));
+        if (entryCount > 1_000_000) return chunkOffset;
 
-        var dirRecords = new List<(uint id, ushort type, string name)>();
+        long entriesStart = chunkOffset + 22;
+        var dirRecords = new List<(uint id, ushort type, string name)>(entryCount > 4096 ? 4096 : (int)entryCount);
 
-        for (int i = 0; i < entryCount; i++)
+        if (version == VersionLegacy)
         {
-            byte[] sizeBuf = new byte[2];
-            stream.ReadExactly(sizeBuf);
-            ushort recSize = BinaryPrimitives.ReadUInt16LittleEndian(sizeBuf);
-
-            int dataLen = recSize - 2;
-            if (dataLen < 6) break;
-
-            byte[] recBuf = new byte[dataLen];
-            stream.ReadExactly(recBuf);
-
-            uint recId = BinaryPrimitives.ReadUInt32LittleEndian(recBuf.AsSpan(0, 4));
-            ushort recType = BinaryPrimitives.ReadUInt16LittleEndian(recBuf.AsSpan(4, 2));
-            string recName = Encoding.Unicode.GetString(recBuf.AsSpan(6)).TrimEnd('\0');
-
-            dirRecords.Add((recId, recType, recName));
+            ReadLegacyDirectoryRecords(stream, entriesStart, entryCount, dirRecords);
+        }
+        else
+        {
+            ReadModernDirectoryRecords(stream, entriesStart, entryCount, dirRecords);
         }
 
         // Sequential data chunks for file entries in this directory
         long dataCur = stream.Position;
-        var fileRecords = dirRecords.Where(r => r.type != 1).ToList();
+        var fileRecords = dirRecords.Where(r => r.type != RecordTypeDirectory).ToList();
 
         foreach (var fileRec in fileRecords)
         {
-            long chunkStartOffset = dataCur;
-            long maskedOffset = fileRec.id ^ FileRecordIdXorMask;
-            if (maskedOffset > 0 && maskedOffset < stream.Length - 22)
-            {
-                stream.Seek(maskedOffset, SeekOrigin.Begin);
-                byte[] probeBuf = new byte[4];
-                if (stream.Read(probeBuf, 0, 4) == 4)
-                {
-                    uint m = BinaryPrimitives.ReadUInt32LittleEndian(probeBuf);
-                    if (m == ChunkAudioDataMagic || m == ChunkResourceDataMagic || m == ChunkScriptDataMagic)
-                    {
-                        chunkStartOffset = maskedOffset;
-                    }
-                }
-            }
+            // Directory records hold the plain chunk offset for regular files (type 3, as written by
+            // monolith containers) or the offset XOR-masked with FileRecordIdXorMask for encrypted
+            // files (type 2). Native writers emit payloads sequentially, so the running cursor is
+            // kept as the last resort.
+            long chunkStartOffset = ResolveFileChunkOffset(stream, fileRec.id ^ FileRecordIdXorMask, fileRec.id, dataCur);
+            if (chunkStartOffset <= 0 || chunkStartOffset >= stream.Length - 22)
+                break;
 
             stream.Seek(chunkStartOffset, SeekOrigin.Begin);
             byte[] chunkProbe = new byte[32];
@@ -178,12 +194,14 @@ public sealed class NkxArchiveReader : IArchiveReader
             if (probeRead < 22) break;
 
             uint chunkMagic = BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(0, 4));
-            ushort chunkVer = BinaryPrimitives.ReadUInt16LittleEndian(chunkProbe.AsSpan(4, 2));
-            ushort chunkKey = BinaryPrimitives.ReadUInt16LittleEndian(chunkProbe.AsSpan(6, 2));
-            bool isChunkEncrypted = _isContainerEncrypted || chunkVer == VersionModernEncrypted || chunkKey != 0;
 
-            long itemSize = 0;
-            int headerLen = 0;
+            // Every chunk header carries the set id and the key index: 0xFF means "stored in clear",
+            // 0x00-0x1F a static legacy key and 0x100 the modern per-library keystream.
+            int chunkKeyIndex = (int)BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(10, 4));
+            bool isChunkEncrypted = _isContainerEncrypted || chunkKeyIndex != KeyIndexNone;
+
+            long itemSize;
+            int headerLen;
 
             if (chunkMagic == ChunkResourceDataMagic) // 0x2ae905fa
             {
@@ -192,19 +210,24 @@ public sealed class NkxArchiveReader : IArchiveReader
             }
             else if (chunkMagic == ChunkAudioDataMagic) // 0x16ccf80a
             {
-                itemSize = (long)BinaryPrimitives.ReadUInt64LittleEndian(chunkProbe.AsSpan(19, 8));
+                // magic, version, set id, key index, 5 unknown, u32 size, 8 unknown
+                itemSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(19, 4));
                 headerLen = 31;
             }
             else if (chunkMagic == ChunkScriptDataMagic) // 0x4916e63c
             {
-                itemSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(14, 4));
-                headerLen = 22;
+                // magic, version, set id, key index, 5 unknown, u32 size, 4 unknown
+                itemSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkProbe.AsSpan(19, 4));
+                headerLen = 27;
             }
             else
             {
                 // Unknown or unaligned chunk
                 break;
             }
+
+            if (itemSize < 0 || chunkStartOffset + headerLen + itemSize > stream.Length)
+                break;
 
             string relativePath;
             if (string.IsNullOrEmpty(currentPath))
@@ -230,14 +253,15 @@ public sealed class NkxArchiveReader : IArchiveReader
                 DataOffset = chunkStartOffset + headerLen,
                 IsDirectory = false,
                 IsEncrypted = isChunkEncrypted,
-                RawType = fileRec.type
+                RawType = fileRec.type,
+                KeyIndex = chunkKeyIndex
             });
 
             dataCur = chunkStartOffset + headerLen + itemSize;
         }
 
         // Subdirectories
-        var subdirs = dirRecords.Where(r => r.type == 1).ToList();
+        var subdirs = dirRecords.Where(r => r.type == RecordTypeDirectory).ToList();
         foreach (var sub in subdirs)
         {
             string subPath;
@@ -260,100 +284,223 @@ public sealed class NkxArchiveReader : IArchiveReader
                 subPath = Path.Combine(currentPath, sub.name);
             }
 
-            dataCur = ParseDirectoryRecursive(stream, dataCur, subPath);
+            dataCur = ParseDirectoryRecursive(stream, ResolveDirectoryChunkOffset(stream, sub.id, dataCur), subPath, version);
         }
 
         return dataCur;
     }
 
-    private void ParseLegacyContainer(FileStream stream)
+    /// <summary>
+    /// Reads modern (0x0110/0x0111/0x0401) directory records: a 16-bit record size followed by the
+    /// 32-bit id, the 16-bit type and a UTF-16 name.
+    /// </summary>
+    private static void ReadModernDirectoryRecords(
+        FileStream stream,
+        long entriesStart,
+        uint entryCount,
+        List<(uint id, ushort type, string name)> records)
     {
-        // Version 0x0100 (NKS)
-        stream.Seek(0, SeekOrigin.Begin);
-        long streamLen = stream.Length;
+        stream.Seek(entriesStart, SeekOrigin.Begin);
 
-        // Collect names from table
-        byte[] probe = new byte[Math.Min(streamLen, 2 * 1024 * 1024)];
-        stream.ReadExactly(probe);
-
-        var nameEntries = new List<string>();
-        int cur = 0x16;
-
-        while (cur < probe.Length - 128)
+        for (uint i = 0; i < entryCount; i++)
         {
-            if (probe[cur] == 0x54 && probe[cur + 1] == 0xac && probe[cur + 2] == 0x70 && probe[cur + 3] == 0x5e)
-            {
-                cur += 22;
-                continue;
-            }
+            byte[] sizeBuf = new byte[2];
+            if (stream.Read(sizeBuf, 0, 2) < 2) break;
 
-            int end = Array.IndexOf(probe, (byte)0, cur);
-            if (end > cur && end - cur < 120)
-            {
-                string name = Encoding.Latin1.GetString(probe, cur, end - cur);
-                if (name.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
-                    name.EndsWith(".ncw", StringComparison.OrdinalIgnoreCase) ||
-                    name.Contains(" "))
-                {
-                    nameEntries.Add(name);
-                }
-            }
-            cur += 128;
+            ushort recSize = BinaryPrimitives.ReadUInt16LittleEndian(sizeBuf);
+            int dataLen = recSize - 2;
+            if (dataLen < 6) break;
+
+            byte[] recBuf = new byte[dataLen];
+            if (stream.Read(recBuf, 0, dataLen) < dataLen) break;
+
+            uint recId = BinaryPrimitives.ReadUInt32LittleEndian(recBuf.AsSpan(0, 4));
+            ushort recType = BinaryPrimitives.ReadUInt16LittleEndian(recBuf.AsSpan(4, 2));
+            string recName = Encoding.Unicode.GetString(recBuf.AsSpan(6)).TrimEnd('\0');
+
+            records.Add((recId, recType, recName));
+        }
+    }
+
+    /// <summary>
+    /// Reads legacy (0x0100) directory records: fixed-size entries holding a NUL-padded Latin1 name,
+    /// one unused byte, the offset and the type hint.
+    /// </summary>
+    private static void ReadLegacyDirectoryRecords(
+        FileStream stream,
+        long entriesStart,
+        uint entryCount,
+        List<(uint id, ushort type, string name)> records)
+    {
+        int stride = DetectLegacyRecordStride(stream, entriesStart, entryCount);
+        byte[] record = new byte[stride];
+
+        for (uint i = 0; i < entryCount; i++)
+        {
+            stream.Seek(entriesStart + i * stride, SeekOrigin.Begin);
+            if (stream.Read(record, 0, stride) < stride) break;
+
+            string recName = ReadLatin1Name(record);
+            uint recId = BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(stride - 6, 4));
+            ushort recType = BinaryPrimitives.ReadUInt16LittleEndian(record.AsSpan(stride - 2, 2));
+
+            records.Add((recId, recType, recName));
         }
 
-        // Scan sequential 0x16ccf80a data chunks
-        stream.Seek(0, SeekOrigin.Begin);
-        byte[] scanBuf = new byte[1024 * 1024];
-        long offset = 0;
-        int fileIdx = 0;
+        stream.Seek(entriesStart + (long)entryCount * stride, SeekOrigin.Begin);
+    }
 
-        while (offset < streamLen - 32)
+    /// <summary>
+    /// Legacy records are 135 bytes (128-byte name field) in Kontakt 1 files and 136 bytes (129-byte
+    /// name field) in files written by later versions. The type hint and the target offset of the
+    /// first records tell the two apart.
+    /// </summary>
+    private static int DetectLegacyRecordStride(FileStream stream, long entriesStart, uint entryCount)
+    {
+        if (entryCount == 0) return LegacyRecordStride;
+
+        byte[] probe = new byte[2 * (LegacyRecordStride + 1) + 8];
+        stream.Seek(entriesStart, SeekOrigin.Begin);
+        int read = stream.Read(probe, 0, probe.Length);
+
+        foreach (int candidate in new[] { LegacyRecordStride, LegacyRecordStride + 1 })
         {
-            stream.Seek(offset, SeekOrigin.Begin);
-            int read = stream.Read(scanBuf, 0, scanBuf.Length);
-            if (read < 32) break;
+            if (read < candidate) continue;
 
-            int chunkPos = -1;
-            for (int i = 0; i <= read - 4; i++)
+            ushort type = BinaryPrimitives.ReadUInt16LittleEndian(probe.AsSpan(candidate - 2, 2));
+            if (!IsKnownRecordType(type)) continue;
+
+            uint rawOffset = BinaryPrimitives.ReadUInt32LittleEndian(probe.AsSpan(candidate - 6, 4));
+            long offset = type == RecordTypeEncryptedFile ? rawOffset ^ FileRecordIdXorMask : rawOffset;
+            if (offset <= 0 || offset >= stream.Length) continue;
+
+            if (entryCount > 1 && read >= 2 * candidate)
             {
-                if (scanBuf[i] == 0x0a && scanBuf[i + 1] == 0xf8 && scanBuf[i + 2] == 0xcc && scanBuf[i + 3] == 0x16)
-                {
-                    chunkPos = i;
-                    break;
-                }
+                ushort nextType = BinaryPrimitives.ReadUInt16LittleEndian(probe.AsSpan(2 * candidate - 2, 2));
+                if (!IsKnownRecordType(nextType)) continue;
             }
 
-            if (chunkPos == -1)
-            {
-                offset += read - 4;
-                continue;
-            }
-
-            long chunkFileOffset = offset + chunkPos;
-            stream.Seek(chunkFileOffset, SeekOrigin.Begin);
-            byte[] chunkHdr = new byte[31];
-            stream.ReadExactly(chunkHdr);
-
-            uint fileSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr.AsSpan(19, 4));
-            long payloadOffset = chunkFileOffset + 31;
-
-            string name = fileIdx < nameEntries.Count ? nameEntries[fileIdx] : $"Sample_{fileIdx + 1:D4}.wav";
-
-            _entries.Add(new ArchiveEntry
-            {
-                Id = _nextEntryId++,
-                RelativePath = name,
-                Size = fileSize,
-                PackedSize = fileSize,
-                DataOffset = payloadOffset,
-                IsDirectory = false,
-                IsEncrypted = false,
-                RawType = 2
-            });
-
-            fileIdx++;
-            offset = payloadOffset + fileSize;
+            return candidate;
         }
+
+        return LegacyRecordStride;
+    }
+
+    private static bool IsKnownRecordType(ushort type) =>
+        type is RecordTypeDirectory or RecordTypeEncryptedFile or RecordTypeFile;
+
+    /// <summary>
+    /// Reads the NUL-terminated Latin1 name of a legacy record, never reaching into the offset and
+    /// type fields that follow the fixed-size name area.
+    /// </summary>
+    private static string ReadLatin1Name(ReadOnlySpan<byte> record)
+    {
+        int nameArea = record.Length - 7;
+        if (nameArea <= 0) return string.Empty;
+
+        ReadOnlySpan<byte> nameBytes = record[..nameArea];
+        int terminator = nameBytes.IndexOf((byte)0);
+        if (terminator >= 0)
+            nameBytes = nameBytes[..terminator];
+
+        return Encoding.Latin1.GetString(nameBytes).Trim();
+    }
+
+    /// <summary>
+    /// Returns true when the file is a Kontakt container, either a standard one (root header magic)
+    /// or a monolith one whose root directory chunk follows a proprietary file header.
+    /// </summary>
+    public static bool IsSupportedContainer(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024);
+            if (stream.Length < 22) return false;
+
+            byte[] head = new byte[4];
+            stream.ReadExactly(head);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(head) == ChunkContainerMagic)
+                return true;
+
+            return FindEmbeddedRootDirectory(stream) >= 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Locates the root directory chunk of a monolith container that starts with a proprietary
+    /// file header instead of the standard 64-byte root header.
+    /// </summary>
+    private static long FindEmbeddedRootDirectory(FileStream stream)
+    {
+        const int ScanLength = 64 * 1024;
+        int length = (int)Math.Min(ScanLength, stream.Length);
+        if (length < 22) return -1;
+
+        byte[] buffer = new byte[length];
+        stream.Seek(0, SeekOrigin.Begin);
+        int read = stream.Read(buffer, 0, length);
+        if (read < 22) return -1;
+
+        for (int i = 0; i <= read - 22; i++)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(i, 4)) != ChunkContainerMagic)
+                continue;
+
+            ushort candidateVersion = BinaryPrimitives.ReadUInt16LittleEndian(buffer.AsSpan(i + 4, 2));
+            if (candidateVersion != VersionModern && candidateVersion != VersionModernEncrypted &&
+                candidateVersion != VersionLegacy && candidateVersion != 0x0401)
+                continue;
+
+            if (BinaryPrimitives.ReadUInt32LittleEndian(buffer.AsSpan(i + 14, 4)) == 0)
+                continue;
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static long ResolveFileChunkOffset(FileStream stream, long xorMaskedOffset, long plainOffset, long sequentialOffset)
+    {
+        if (IsDataChunkAt(stream, xorMaskedOffset)) return xorMaskedOffset;
+        if (IsDataChunkAt(stream, plainOffset)) return plainOffset;
+        return sequentialOffset;
+    }
+
+    private static long ResolveDirectoryChunkOffset(FileStream stream, long recordedOffset, long sequentialOffset)
+    {
+        return IsDirectoryChunkAt(stream, recordedOffset) ? recordedOffset : sequentialOffset;
+    }
+
+    private static bool IsDataChunkAt(FileStream stream, long offset)
+    {
+        if (offset <= 0 || offset >= stream.Length - 22) return false;
+
+        stream.Seek(offset, SeekOrigin.Begin);
+        byte[] probe = new byte[4];
+        if (stream.Read(probe, 0, 4) != 4) return false;
+
+        uint magic = BinaryPrimitives.ReadUInt32LittleEndian(probe);
+        return magic == ChunkAudioDataMagic || magic == ChunkResourceDataMagic || magic == ChunkScriptDataMagic;
+    }
+
+    private static bool IsDirectoryChunkAt(FileStream stream, long offset)
+    {
+        if (offset <= 0 || offset >= stream.Length - 22) return false;
+
+        stream.Seek(offset, SeekOrigin.Begin);
+        byte[] probe = new byte[4];
+        if (stream.Read(probe, 0, 4) != 4) return false;
+
+        return BinaryPrimitives.ReadUInt32LittleEndian(probe) == ChunkContainerMagic;
     }
 
     /// <summary>
@@ -382,70 +529,97 @@ public sealed class NkxArchiveReader : IArchiveReader
     {
         string archiveBaseName = Path.GetFileNameWithoutExtension(_filePath);
         string? archiveDir = Path.GetDirectoryName(_filePath);
+        List<string> lookupNames = BuildLibraryLookupNames(archiveBaseName, archiveDir);
 
-        // 1. Try finding .nicnt file in same directory or parent directory
-        if (!string.IsNullOrEmpty(archiveDir))
+        // 1. Native Instruments registry: an installed, working library necessarily carries the right
+        //    keys there, so the registry wins over every other source.
+        foreach (string name in lookupNames)
         {
-            var candidateDirs = new List<string> { archiveDir };
-            string? parent = Path.GetDirectoryName(archiveDir);
-            if (!string.IsNullOrEmpty(parent))
-                candidateDirs.Add(parent);
-
-            string cleanBase = System.Text.RegularExpressions.Regex.Replace(archiveBaseName, @"[_\s]*(?:part|\d)+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
-
-            foreach (var dir in candidateDirs)
-            {
-                string exactNicnt = Path.Combine(dir, archiveBaseName + ".nicnt");
-                if (File.Exists(exactNicnt))
-                {
-                    var entry = TryExtractKeyFromNicnt(exactNicnt);
-                    if (entry != null) return entry;
-                }
-
-                if (!string.IsNullOrEmpty(cleanBase) && !cleanBase.Equals(archiveBaseName, StringComparison.OrdinalIgnoreCase))
-                {
-                    string candidateNicnt = Path.Combine(dir, cleanBase + ".nicnt");
-                    if (File.Exists(candidateNicnt))
-                    {
-                        var entry = TryExtractKeyFromNicnt(candidateNicnt);
-                        if (entry != null) return entry;
-                    }
-                }
-
-                foreach (var nicnt in Directory.GetFiles(dir, "*.nicnt"))
-                {
-                    string nicntBase = Path.GetFileNameWithoutExtension(nicnt);
-                    if (nicntBase.Equals(archiveBaseName, StringComparison.OrdinalIgnoreCase) ||
-                        (!string.IsNullOrEmpty(cleanBase) && nicntBase.Equals(cleanBase, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        var entry = TryExtractKeyFromNicnt(nicnt);
-                        if (entry != null) return entry;
-                    }
-                }
-            }
+            if (NkxRegistryKeys.TryGet(name, out var registryEntry))
+                return registryEntry;
         }
 
-        // 2. Try looking up in database by archive name
-        if (_keyDatabase.TryGetKey(archiveBaseName, out var foundEntry))
-            return foundEntry;
-
-        // 3. Try directory names
-        if (!string.IsNullOrEmpty(archiveDir))
+        // 2. nklibs.db, imported from NativeAccess.xml (local or online); it also carries the keys of
+        //    the Service Center, so a nearby .nicnt file is only the last resort.
+        foreach (string name in lookupNames)
         {
-            string parentDirName = Path.GetFileName(archiveDir);
-            if (_keyDatabase.TryGetKey(parentDirName, out var dirEntry))
-                return dirEntry;
+            if (_keyDatabase.TryGetKey(name, out var foundEntry))
+                return foundEntry;
+        }
 
-            string? grandParent = Path.GetDirectoryName(archiveDir);
-            if (!string.IsNullOrEmpty(grandParent))
-            {
-                string grandParentName = Path.GetFileName(grandParent);
-                if (_keyDatabase.TryGetKey(grandParentName, out var grandEntry))
-                    return grandEntry;
-            }
+        // 3. The .nicnt file shipped next to the archive (or in the folder above it).
+        if (string.IsNullOrEmpty(archiveDir))
+            return null;
+
+        foreach (string nicnt in FindNearbyNicntFiles(archiveDir, lookupNames))
+        {
+            var nicntEntry = TryExtractKeyFromNicnt(nicnt);
+            if (nicntEntry != null) return nicntEntry;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Names under which the library owning the archive may be known, most specific first: the
+    /// archive name, that name without its volume suffix (e.g. "part3"), the containing folder and
+    /// the folder above it.
+    /// </summary>
+    private static List<string> BuildLibraryLookupNames(string archiveBaseName, string? archiveDir)
+    {
+        var names = new List<string>(4);
+
+        void Add(string? candidate)
+        {
+            string name = candidate?.Trim() ?? string.Empty;
+            if (name.Length == 0) return;
+            if (!names.Contains(name, StringComparer.OrdinalIgnoreCase)) names.Add(name);
+        }
+
+        Add(archiveBaseName);
+        Add(System.Text.RegularExpressions.Regex.Replace(
+            archiveBaseName, @"[_\s]*(?:part|\d)+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+
+        if (string.IsNullOrEmpty(archiveDir)) return names;
+
+        Add(Path.GetFileName(archiveDir));
+
+        string? parent = Path.GetDirectoryName(archiveDir);
+        if (!string.IsNullOrEmpty(parent))
+            Add(Path.GetFileName(parent));
+
+        return names;
+    }
+
+    /// <summary>
+    /// Sibling (and parent folder) <c>.nicnt</c> files whose name matches one of the lookup names.
+    /// Unrelated <c>.nicnt</c> files are ignored: guessing a key would silently corrupt the output.
+    /// </summary>
+    private static IEnumerable<string> FindNearbyNicntFiles(string archiveDir, List<string> lookupNames)
+    {
+        var directories = new List<string> { archiveDir };
+        string? parent = Path.GetDirectoryName(archiveDir);
+        if (!string.IsNullOrEmpty(parent))
+            directories.Add(parent);
+
+        foreach (string dir in directories)
+        {
+            string[] nicntFiles;
+            try
+            {
+                nicntFiles = Directory.GetFiles(dir, "*.nicnt");
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (string nicnt in nicntFiles)
+            {
+                if (lookupNames.Contains(Path.GetFileNameWithoutExtension(nicnt), StringComparer.OrdinalIgnoreCase))
+                    yield return nicnt;
+            }
+        }
     }
 
     private NkxKeyEntry? TryExtractKeyFromNicnt(string nicntPath)
@@ -496,24 +670,40 @@ public sealed class NkxArchiveReader : IArchiveReader
         return null;
     }
 
+    /// <summary>
+    /// Wraps an entry payload in the stream that yields its clear content: a plain slice for clear
+    /// entries, the legacy static key stream for old containers, and the library keystream otherwise.
+    /// </summary>
+    private Stream CreatePayloadStream(FileStream source, ArchiveEntry entry)
+    {
+        Stream payload = new SubReadStream(source, entry.DataOffset, entry.Size);
+
+        if (!entry.IsEncrypted)
+            return payload;
+
+        if (entry.KeyIndex >= 0 && entry.KeyIndex <= LegacyKeyIndexMax)
+        {
+            // Legacy (0x0100) payloads use one of 32 static 16-byte keys, applied from the absolute
+            // file offset of the payload rather than from its start.
+            byte[] legacyKey = NkxKeystream.CreateLegacyKey(entry.KeyIndex);
+            return new NkxDecryptReadStream(payload, legacyKey, leaveOpen: true, phase: entry.DataOffset);
+        }
+
+        byte[]? keystream = GetOrCreateKeystream();
+        if (keystream == null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot decrypt entry '{entry.RelativePath}'. Decryption key (HU/JDX) not found in the Native Instruments registry, nklibs.db or an associated .nicnt file. " +
+                $"Please run 'NkxTool update' to import keys from NativeAccess.xml or add the key to nklibs.db.");
+        }
+
+        return new NkxDecryptReadStream(payload, keystream, leaveOpen: true);
+    }
+
     public Stream OpenEntryStream(ArchiveEntry entry)
     {
         _fileStream ??= new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024);
-        var subStream = new SubReadStream(_fileStream, entry.DataOffset, entry.Size);
-
-        if (entry.IsEncrypted)
-        {
-            byte[]? keystream = GetOrCreateKeystream();
-            if (keystream == null)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot decrypt entry '{entry.RelativePath}'. Decryption key (HU/JDX) not found in nklibs.db or associated .nicnt file. " +
-                    $"Please run 'NkxTool update' to import keys from NativeAccess.xml or add the key to nklibs.db.");
-            }
-            return new NkxDecryptReadStream(subStream, keystream);
-        }
-
-        return subStream;
+        return CreatePayloadStream(_fileStream, entry);
     }
 
     public async Task<ExtractionResult> ExtractAllAsync(
@@ -576,22 +766,8 @@ public sealed class NkxArchiveReader : IArchiveReader
             try
             {
                 using var sourceStream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, options.StreamBufferSize);
-                sourceStream.Seek(entry.DataOffset, SeekOrigin.Begin);
+                using var readStream = CreatePayloadStream(sourceStream, entry);
 
-                Stream readStream = new SubReadStream(sourceStream, entry.DataOffset, entry.Size);
-                if (entry.IsEncrypted)
-                {
-                    byte[]? keystream = GetOrCreateKeystream();
-                    if (keystream == null)
-                    {
-                        throw new InvalidOperationException(
-                            $"Cannot decrypt entry '{entry.RelativePath}'. Decryption key (HU/JDX) not found in nklibs.db or associated .nicnt file. " +
-                            $"Please run 'NkxTool update' to import keys from NativeAccess.xml or add the key to nklibs.db.");
-                    }
-                    readStream = new NkxDecryptReadStream(readStream, keystream);
-                }
-
-                using (readStream)
                 using (var destStream = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous))
                 {
                     await readStream.CopyToAsync(destStream, options.StreamBufferSize, ct).ConfigureAwait(false);

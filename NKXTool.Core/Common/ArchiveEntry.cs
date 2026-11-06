@@ -41,6 +41,13 @@ public sealed class ArchiveEntry
     public bool IsEncrypted { get; init; }
 
     /// <summary>
+    /// Key index stored in the chunk header: <c>0xFF</c> when the payload is stored in clear,
+    /// <c>0x00</c>-<c>0x1F</c> for the static legacy (0x0100) keys, and <c>0x100</c> for the
+    /// modern per-library keystream. <c>-1</c> when the entry carries no header information.
+    /// </summary>
+    public int KeyIndex { get; init; } = -1;
+
+    /// <summary>
     /// Raw file type flag from the container header (e.g. 1=dir, 2=file).
     /// </summary>
     public uint RawType { get; init; }

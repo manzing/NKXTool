@@ -9,13 +9,20 @@ public sealed class NkxDecryptReadStream : Stream
     private readonly Stream _baseStream;
     private readonly byte[] _keystream;
     private readonly bool _leaveOpen;
+    private readonly long _phase;
     private long _position;
 
-    public NkxDecryptReadStream(Stream baseStream, byte[] keystream, bool leaveOpen = false)
+    /// <param name="baseStream">Stream positioned on the first payload byte.</param>
+    /// <param name="keystream">Repeating XOR keystream.</param>
+    /// <param name="leaveOpen">Keep the base stream open when this stream is disposed.</param>
+    /// <param name="phase">Absolute file offset of the payload, for legacy static keys whose
+    /// XOR phase depends on where the payload sits in the container.</param>
+    public NkxDecryptReadStream(Stream baseStream, byte[] keystream, bool leaveOpen = false, long phase = 0)
     {
         _baseStream = baseStream ?? throw new ArgumentNullException(nameof(baseStream));
         _keystream = keystream ?? throw new ArgumentNullException(nameof(keystream));
         _leaveOpen = leaveOpen;
+        _phase = phase;
         _position = 0;
     }
 
@@ -42,7 +49,7 @@ public sealed class NkxDecryptReadStream : Stream
         int bytesRead = _baseStream.Read(buffer);
         if (bytesRead > 0)
         {
-            NkxKeystream.ApplyKeystream(_keystream, currentOffset, buffer[..bytesRead]);
+            NkxKeystream.ApplyKeystream(_keystream, _phase + currentOffset, buffer[..bytesRead]);
             _position += bytesRead;
         }
         return bytesRead;
@@ -54,7 +61,7 @@ public sealed class NkxDecryptReadStream : Stream
         int bytesRead = await _baseStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
         if (bytesRead > 0)
         {
-            NkxKeystream.ApplyKeystream(_keystream, currentOffset, buffer.Span[..bytesRead]);
+            NkxKeystream.ApplyKeystream(_keystream, _phase + currentOffset, buffer.Span[..bytesRead]);
             _position += bytesRead;
         }
         return bytesRead;

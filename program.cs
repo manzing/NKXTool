@@ -20,7 +20,9 @@ public class Program
     private static readonly HashSet<string> SupportedArchiveExtensions =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            ".nkx", ".nkr", ".nicnt", ".nks"
+            ".nkx", ".nkr", ".nicnt", ".nks",
+            // Kontakt monolith patches and containers: same directory/chunk layout as .nkx.
+            ".nki", ".nkm", ".nkb", ".nkg"
         };
 
     private static string NormalizeArchivePath(string path)
@@ -70,6 +72,7 @@ public class Program
         // Update command
         if (operation == "update")
         {
+            bool online = argsList.Contains("--online");
             string? customXmlPath = null;
             int fIndex = argsList.IndexOf("-f");
             if (fIndex >= 0)
@@ -90,7 +93,13 @@ public class Program
                 customXmlPath = Path.GetFullPath(rawPath);
             }
 
-            return UpdateUserDb(customXmlPath);
+            if (online && customXmlPath != null)
+            {
+                Console.WriteLine("Error: --online cannot be combined with -f");
+                return 1;
+            }
+
+            return UpdateUserDb(customXmlPath, online);
         }
 
         // Dump command for NKI
@@ -238,7 +247,7 @@ public class Program
         Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt] [-y]");
         Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
-        Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>]");
+        Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>] [--online]");
         Console.WriteLine("  NkxTool dump <instrument.nki> [--out report.txt]");
         Console.WriteLine("  NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
         Console.WriteLine("  NkxTool nki-version <instrument.nki> [-v]");
@@ -247,33 +256,43 @@ public class Program
         Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
         Console.WriteLine("  NkxTool update");
         Console.WriteLine("  NkxTool update -f \"C:\\Program Files\\Common Files\\Native Instruments\\Service Center\\NativeAccess.xml\"");
+        Console.WriteLine("  NkxTool update --online");
         Console.WriteLine("  NkxTool nki-infoscan \"Piano.nki\" --length 4096 --out version_report.txt");
         Console.WriteLine("  NkxTool nki-version \"Piano.nki\"");
         Console.WriteLine();
         Console.WriteLine("Options:");
         Console.WriteLine("  -y : Overwrite existing files without skipping (unpack only)");
         Console.WriteLine("  -f : Specify a custom path to NativeAccess.xml (update only)");
+        Console.WriteLine("  --online : Download the current product hints from Native Instruments instead of using the local NativeAccess.xml (update only)");
         Console.WriteLine("  --length N : Number of bytes to scan from the start of the file (nki-infoscan only, default 4096)");
         Console.WriteLine("  --out : Write the report to a file instead of (or in addition to) the console");
         Console.WriteLine("  -v : Verbose mode, lists all version candidates found (nki-version only)");
         Console.WriteLine();
-        Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks");
+        Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks, .nki, .nkm, .nkb, .nkg");
     }
 
     // --- UPDATE KEY DATABASE ---
-    private static int UpdateUserDb(string? customXmlPath = null)
+    private static int UpdateUserDb(string? customXmlPath = null, bool online = false)
     {
-        Console.WriteLine("Updating nklibs.db from NativeAccess.xml...");
+        Console.WriteLine(online
+            ? $"Updating nklibs.db from {NkxKeyDatabase.OnlineSourceUrl}..."
+            : "Updating nklibs.db from NativeAccess.xml...");
 
         try
         {
             string exeDirectory = AppDomain.CurrentDomain.BaseDirectory;
             string dbPath = Path.Combine(exeDirectory, NkxKeyDatabase.DefaultDbFileName);
 
-            var (entryCount, duplicates, targetPath) = NkxKeyDatabase.UpdateFromNativeAccessXml(customXmlPath, dbPath);
+            NkxKeyDatabaseUpdateResult result = online
+                ? NkxKeyDatabase.UpdateFromOnlinePhintsAsync(dbPath).GetAwaiter().GetResult()
+                : NkxKeyDatabase.UpdateFromNativeAccessXml(customXmlPath, dbPath);
 
-            Console.WriteLine($"Success. Generated database: {targetPath}");
-            Console.WriteLine($"Total entries written: {entryCount} (including {duplicates} decimal/hex duplicates).");
+            Console.WriteLine($"Source: {result.Source}");
+            Console.WriteLine($"Products scanned: {result.ProductsScanned} ({result.ProductsSkipped} skipped, no key available).");
+            Console.WriteLine($"Entries: {result.EntriesAdded} added, {result.AliasEntriesAdded} decimal/hex duplicates added, " +
+                              $"{result.EntriesUpdated} updated, {result.EntriesPreserved} existing entries kept.");
+            Console.WriteLine($"Total entries in database: {result.TotalEntries}");
+            Console.WriteLine($"Success. Generated database: {result.TargetPath}");
             return E_SUCCESS;
         }
         catch (Exception ex)

@@ -45,6 +45,12 @@ public static class NkxArchive
             return new NicntArchiveReader(fullPath);
         }
 
+        // Check 3: NKX monolith container prefixed by a proprietary sample header (0x7FA89012)
+        if (NkxArchiveReader.IsSupportedContainer(fullPath))
+        {
+            return new NkxArchiveReader(fullPath, keyDatabase);
+        }
+
         throw new NotSupportedException($"Unrecognized archive container format in '{Path.GetFileName(filePath)}'.");
     }
 }

@@ -120,30 +120,35 @@ public static class NicntArchiveWriter
 
         // Write TOC records (640 bytes each)
         long runningPayloadRelOffset = 0;
-        var recordList = new List<(long relOffset, int id, string name, string diskPath, long size)>();
-        int idCounter = 0;
+        var recordList = new List<(long endOffset, int id, string name, string diskPath, long size)>();
+        int idCounter = 1;
 
         foreach (var rf in resourceFiles)
         {
-            recordList.Add((runningPayloadRelOffset, idCounter++, rf.relName, rf.diskPath, rf.size));
             runningPayloadRelOffset += rf.size;
+            recordList.Add((runningPayloadRelOffset, idCounter++, rf.relName, rf.diskPath, rf.size));
         }
 
         foreach (var rec in recordList)
         {
             byte[] recBuf = new byte[TocRecordSize];
-            BitConverter.GetBytes(rec.relOffset).CopyTo(recBuf, 0);
-            BitConverter.GetBytes(rec.id).CopyTo(recBuf, 8);
+            // 1-based record index at offset 0
+            BitConverter.GetBytes((long)rec.id).CopyTo(recBuf, 0);
 
+            // Null-terminated UTF-16LE filename at offset 24
             byte[] nameBytes = Encoding.Unicode.GetBytes(rec.name + "\0");
-            int copyLen = Math.Min(nameBytes.Length, TocRecordSize - 24);
+            int copyLen = Math.Min(nameBytes.Length, TocRecordSize - 24 - 8);
             Array.Copy(nameBytes, 0, recBuf, 24, copyLen);
+
+            // Cumulative running payload end offset at offset 0x278 (TocRecordSize - 8)
+            BitConverter.GetBytes(rec.endOffset).CopyTo(recBuf, TocRecordSize - 8);
 
             await fs.WriteAsync(recBuf, cancellationToken).ConfigureAwait(false);
         }
 
-        // Pad to 16-byte boundary or at least 24 bytes before TOC 2
+        // End-of-records marker: 8 bytes of 0xF1 followed by 16 bytes of zeros (24 bytes total)
         byte[] toc1Pad = new byte[24];
+        for (int i = 0; i < 8; i++) toc1Pad[i] = 0xF1;
         await fs.WriteAsync(toc1Pad, cancellationToken).ConfigureAwait(false);
 
         // TOC 2: NI FC TOC

@@ -1,5 +1,7 @@
 namespace NKXTool.Core.Cryptography;
 
+using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -12,6 +14,15 @@ public sealed class NkxKeyDatabase
 {
     public const string DefaultDbFileName = "nklibs.db";
     public const string LegacyDbFileName = "nklibs_info.userdb";
+
+    /// <summary>
+    /// Online product hints document published by Native Instruments.
+    /// It uses the same &lt;Product&gt; structure as the local NativeAccess.xml.
+    /// </summary>
+    public const string OnlineSourceUrl = "https://api.native-instruments.com/static/phints";
+
+    private const string OnlineUserAgent = "NKXTool/1.0 NativeAccess";
+    private const long MaxOnlineDocumentBytes = 64L * 1024 * 1024;
 
     private readonly Dictionary<string, NkxKeyEntry> _bySnpid = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, NkxKeyEntry> _byRegKey = new(StringComparer.OrdinalIgnoreCase);
@@ -42,6 +53,15 @@ public sealed class NkxKeyDatabase
         return modernPath;
     }
 
+    /// <summary>
+    /// Default location of the NativeAccess.xml file installed by Native Instruments.
+    /// </summary>
+    public static string ResolveDefaultNativeAccessXmlPath()
+    {
+        string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
+        return Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
+    }
+
     public static NkxKeyDatabase Load(string? dbPath = null, string? baseDirectory = null)
     {
         var db = new NkxKeyDatabase();
@@ -60,17 +80,7 @@ public sealed class NkxKeyDatabase
     /// </summary>
     public void SaveFile(string path)
     {
-        var sb = new StringBuilder();
-        foreach (var entry in _bySnpid.Values)
-        {
-            sb.AppendLine($"[{entry.Snpid}]");
-            sb.AppendLine($"JDX={entry.JdxHex}");
-            sb.AppendLine($"HU={entry.HuHex}");
-            sb.AppendLine($"RegKey={entry.RegKey}");
-            sb.AppendLine($"Company={entry.Company}");
-            sb.AppendLine();
-        }
-        File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+        File.WriteAllText(path, Serialize(), Encoding.UTF8);
     }
 
     public bool TryGetKey(string snpidOrKey, out NkxKeyEntry? entry)
@@ -160,80 +170,269 @@ public sealed class NkxKeyDatabase
     }
 
     /// <summary>
-    /// Updates or creates the nklibs.db database file by parsing NativeAccess.xml.
+    /// Updates or creates the nklibs.db database file by parsing the local NativeAccess.xml.
+    /// Existing entries that are not present in the XML are preserved.
     /// </summary>
-    public static (int entryCount, int duplicatedCount, string targetPath) UpdateFromNativeAccessXml(
+    public static NkxKeyDatabaseUpdateResult UpdateFromNativeAccessXml(
         string? customXmlPath = null,
         string? customDbPath = null)
     {
-        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        string targetDbPath = customDbPath ?? Path.Combine(baseDir, DefaultDbFileName);
-
-        string xmlPath;
-        if (!string.IsNullOrEmpty(customXmlPath))
-        {
-            xmlPath = Path.GetFullPath(customXmlPath);
-        }
-        else
-        {
-            string commonFiles = Environment.GetFolderPath(Environment.SpecialFolder.CommonProgramFiles);
-            xmlPath = Path.Combine(commonFiles, "Native Instruments", "Service Center", "NativeAccess.xml");
-        }
+        string xmlPath = string.IsNullOrEmpty(customXmlPath)
+            ? ResolveDefaultNativeAccessXmlPath()
+            : Path.GetFullPath(customXmlPath);
 
         if (!File.Exists(xmlPath))
             throw new FileNotFoundException($"NativeAccess.xml file not found at: {xmlPath}", xmlPath);
 
-        var sb = new StringBuilder();
-        int entryCount = 0;
-        int duplicatedHexCount = 0;
+        XmlDocument xmlDoc = LoadXml(xmlPath);
+        return ImportProductHints(xmlDoc, xmlPath, customDbPath);
+    }
 
-        var xmlDoc = new XmlDocument();
-        xmlDoc.Load(xmlPath);
-        var productNodes = xmlDoc.SelectNodes("//Product");
+    /// <summary>
+    /// Updates or creates the nklibs.db database file from the online product hints published
+    /// by Native Instruments. Existing entries that are not present online are preserved.
+    /// </summary>
+    public static async Task<NkxKeyDatabaseUpdateResult> UpdateFromOnlinePhintsAsync(
+        string? customDbPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        byte[] payload;
 
-        if (productNodes != null)
+        using (var handler = new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All })
+        using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(120) })
         {
-            foreach (XmlNode node in productNodes)
+            // The static host only serves this document to Native Instruments clients:
+            // requests with an unknown user agent (including a bare "NKXTool/1.0") get HTTP 403.
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(OnlineUserAgent);
+
+            using var response = await client
+                .GetAsync(OnlineSourceUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
             {
-                string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
-                XmlNode? psNode = node.SelectSingleNode("ProductSpecific");
-                if (string.IsNullOrEmpty(snpid) || psNode == null) continue;
+                throw new HttpRequestException(
+                    $"Downloading '{OnlineSourceUrl}' failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
+            }
 
-                string? jdx = psNode.SelectSingleNode("JDX")?.InnerText?.Trim();
-                string? hu = psNode.SelectSingleNode("HU")?.InnerText?.Trim();
-                string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
-                string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
+            long? declaredLength = response.Content.Headers.ContentLength;
+            if (declaredLength.HasValue && declaredLength.Value > MaxOnlineDocumentBytes)
+            {
+                throw new InvalidDataException(
+                    $"The document at '{OnlineSourceUrl}' is unexpectedly large ({declaredLength.Value:N0} bytes).");
+            }
 
-                if (string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu)) continue;
+            using var networkStream = await response.Content
+                .ReadAsStreamAsync(cancellationToken)
+                .ConfigureAwait(false);
 
-                void AppendEntry(string id)
+            payload = await ReadBoundedAsync(networkStream, cancellationToken).ConfigureAwait(false);
+        }
+
+        XmlDocument xmlDoc = new() { XmlResolver = null };
+        try
+        {
+            using var memoryStream = new MemoryStream(payload, writable: false);
+            xmlDoc.Load(memoryStream);
+        }
+        catch (XmlException ex)
+        {
+            throw new InvalidDataException(
+                $"The document downloaded from '{OnlineSourceUrl}' is not valid XML: {ex.Message}", ex);
+        }
+
+        return ImportProductHints(xmlDoc, OnlineSourceUrl, customDbPath);
+    }
+
+    private static XmlDocument LoadXml(string path)
+    {
+        var xmlDoc = new XmlDocument { XmlResolver = null };
+        xmlDoc.Load(path);
+        return xmlDoc;
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(Stream source, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        byte[] chunk = new byte[81920];
+        int read;
+
+        while ((read = await source.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > MaxOnlineDocumentBytes)
+            {
+                throw new InvalidDataException(
+                    $"The document at '{OnlineSourceUrl}' exceeds the {MaxOnlineDocumentBytes / (1024 * 1024)} MB limit.");
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// Merges the &lt;Product&gt; nodes of a product hints document into the database file.
+    /// Entries already present keep their keys unless the document provides newer ones, and
+    /// entries absent from the document are never removed.
+    /// </summary>
+    private static NkxKeyDatabaseUpdateResult ImportProductHints(
+        XmlDocument document,
+        string source,
+        string? customDbPath)
+    {
+        string targetDbPath = customDbPath ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, DefaultDbFileName);
+        NkxKeyDatabase database = Load(targetDbPath);
+
+        int entriesBefore = database.Count;
+        var existingSnpids = new HashSet<string>(database._bySnpid.Keys, StringComparer.OrdinalIgnoreCase);
+        var countedSnpids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        int productsScanned = 0;
+        int productsSkipped = 0;
+        int entriesAdded = 0;
+        int entriesUpdated = 0;
+        int entriesPreserved = 0;
+        int aliasEntriesAdded = 0;
+
+        var productNodes = document.SelectNodes("//Product");
+        if (productNodes == null || productNodes.Count == 0)
+            throw new InvalidDataException($"No <Product> entry found in '{source}'. Existing database left untouched.");
+
+        foreach (XmlNode node in productNodes)
+        {
+            productsScanned++;
+
+            string? snpid = node.SelectSingleNode("SNPID")?.InnerText?.Trim();
+            XmlNode? productSpecific = node.SelectSingleNode("ProductSpecific");
+            string? jdx = productSpecific?.SelectSingleNode("JDX")?.InnerText?.Trim();
+            string? hu = productSpecific?.SelectSingleNode("HU")?.InnerText?.Trim();
+
+            if (string.IsNullOrEmpty(snpid) || string.IsNullOrEmpty(jdx) || string.IsNullOrEmpty(hu))
+            {
+                productsSkipped++;
+                continue;
+            }
+
+            string regKey = node.SelectSingleNode("RegKey")?.InnerText?.Trim() ?? "Unknown";
+            string company = node.SelectSingleNode("Company")?.InnerText?.Trim() ?? "Unknown";
+
+            foreach ((string id, bool isAlias) in BuildSnpidVariants(snpid))
+            {
+                var entry = new NkxKeyEntry
                 {
-                    sb.AppendLine($"[{id}]");
-                    sb.AppendLine($"JDX={jdx}");
-                    sb.AppendLine($"HU={hu}");
-                    sb.AppendLine($"RegKey={regKey}");
-                    sb.AppendLine($"Company={company}");
-                    sb.AppendLine();
-                    entryCount++;
-                }
+                    Snpid = id,
+                    JdxHex = jdx,
+                    HuHex = hu,
+                    RegKey = regKey,
+                    Company = company
+                };
 
-                // 1. Raw original value
-                AppendEntry(snpid);
-
-                // 2. Hex duplicate if numeric
-                if (Regex.IsMatch(snpid, @"^\d+$") && int.TryParse(snpid, out int snpidInt))
+                bool alreadyInSource = !countedSnpids.Add(id);
+                if (!alreadyInSource)
                 {
-                    string hexSnpid = snpidInt.ToString("X3");
-                    if (!string.Equals(hexSnpid, snpid, StringComparison.OrdinalIgnoreCase))
+                    bool isNew = !existingSnpids.Contains(id);
+                    if (isNew)
                     {
-                        AppendEntry(hexSnpid);
-                        duplicatedHexCount++;
+                        if (isAlias) aliasEntriesAdded++;
+                        else entriesAdded++;
+                    }
+                    else
+                    {
+                        entriesUpdated++;
                     }
                 }
+
+                database.AddOrUpdate(entry);
             }
         }
 
-        File.WriteAllText(targetDbPath, sb.ToString(), Encoding.UTF8);
-        return (entryCount, duplicatedHexCount, targetDbPath);
+        if (database.Count == 0)
+            throw new InvalidDataException($"No usable key entry found in '{source}'. Existing database left untouched.");
+
+        entriesPreserved = existingSnpids.Count - entriesUpdated;
+        WriteDatabase(database, targetDbPath);
+
+        return new NkxKeyDatabaseUpdateResult(
+            Source: source,
+            TargetPath: targetDbPath,
+            ProductsScanned: productsScanned,
+            ProductsSkipped: productsSkipped,
+            EntriesAdded: entriesAdded,
+            AliasEntriesAdded: aliasEntriesAdded,
+            EntriesUpdated: entriesUpdated,
+            EntriesPreserved: entriesPreserved < 0 ? 0 : entriesPreserved,
+            TotalEntries: database.Count);
+    }
+
+    /// <summary>
+    /// A 3-character SNPID is ambiguous: the archive may reference the decimal spelling or the
+    /// hexadecimal spelling of the same number (e.g. "144" / "090"). Both are therefore stored,
+    /// which is what the historical decimal/hex duplication in nklibs.db has always done.
+    /// </summary>
+    private static IEnumerable<(string Snpid, bool IsAlias)> BuildSnpidVariants(string snpid)
+    {
+        yield return (snpid, false);
+
+        if (!Regex.IsMatch(snpid, @"^\d+$"))
+            yield break;
+
+        if (!int.TryParse(snpid, NumberStyles.None, CultureInfo.InvariantCulture, out int numericSnpid))
+            yield break;
+
+        string hexSnpid = numericSnpid.ToString("X3", CultureInfo.InvariantCulture);
+        if (!string.Equals(hexSnpid, snpid, StringComparison.OrdinalIgnoreCase))
+            yield return (hexSnpid, true);
+    }
+
+    private static void WriteDatabase(NkxKeyDatabase database, string targetDbPath)
+    {
+        string fullPath = Path.GetFullPath(targetDbPath);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        string tempPath = fullPath + ".tmp";
+        try
+        {
+            File.WriteAllText(tempPath, database.Serialize(), Encoding.UTF8);
+            File.Move(tempPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* best effort cleanup */ }
+            }
+        }
+    }
+
+    private string Serialize()
+    {
+        var sb = new StringBuilder();
+        foreach (var entry in _bySnpid.Values)
+        {
+            sb.AppendLine($"[{entry.Snpid}]");
+            sb.AppendLine($"JDX={entry.JdxHex}");
+            sb.AppendLine($"HU={entry.HuHex}");
+            sb.AppendLine($"RegKey={entry.RegKey}");
+            sb.AppendLine($"Company={entry.Company}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
     }
 }
+
+/// <summary>
+/// Outcome of a key database update, including merge statistics.
+/// </summary>
+public sealed record NkxKeyDatabaseUpdateResult(
+    string Source,
+    string TargetPath,
+    int ProductsScanned,
+    int ProductsSkipped,
+    int EntriesAdded,
+    int AliasEntriesAdded,
+    int EntriesUpdated,
+    int EntriesPreserved,
+    int TotalEntries);
