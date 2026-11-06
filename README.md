@@ -1,80 +1,117 @@
-# NkxTool - Native Kontakt Archive CLI Utility & Engine
+# NKXTool - Kontakt Archive Tool
 
-NkxTool is a high-performance, 100% native 64-bit .NET 10 utility and library for managing Native Instruments Kontakt archives. Built entirely in modern C# (`NKXTool.Core`), it operates completely standalone without requiring any external C++ plugin or Total Commander WCX dependencies.
+**Version 2.0.0** - fully native engine.
 
-## 🚀 Key Features
+NKXTool is a standalone command-line tool for Windows that works with the archive files shipped with Native Instruments Kontakt libraries: it lists what a library contains, extracts the content to ordinary files, and rebuilds archives from a folder or a file list. It ships as a single executable - no installer, no plugin, no external dependency.
 
-- **Multi-Format Support:** Native reading, parsing, and extraction for `.nkx` (Audio Samples), `.nkr` (Resources/Scripts/Pictures), `.nicnt` (Monolith Library Info & Artwork), legacy `.nks` (Kontakt 1/2 containers) and Kontakt monolith patches/containers (`.nki`, `.nkm`, `.nkb`, `.nkg`).
-- **Multi-Threaded Extraction:** High-speed parallel extraction engine utilizing modern thread pooling, with per-file progress reporting and detailed error tracking.
-- **Smart Packing (Auto-Split):** Generates compliant Kontakt archives with automatic splitting at the 1.95 GB (`2,090,000,000` bytes) volume threshold (`_00.nkx`, `_01.nkx`, etc.).
-- **Filelist Packing:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), ideal for automated batch pipelines and audio conversions.
-- **Decryption Database (`nklibs.db`):** Fully integrated AES-ECB hardware-accelerated decryption engine powered by an INI key database. Keys can be populated or synchronized automatically from `NativeAccess.xml` using `nkxtool update`.
-- **Registry Keys:** Library keys are read (read-only) from `HKLM\SOFTWARE\Native Instruments\<Library name>` in both the 64-bit and 32-bit registry views, and are the first source consulted: an installed, working library necessarily carries the right keys.
-- **Monolith Containers:** Containers whose file starts with a proprietary sample header (`0x7FA89012`, as shipped by Embertone) are read too: the root directory chunk is located after that header and directory/file entries are resolved from their recorded absolute offsets.
-- **Legacy Containers:** Kontakt 1 `.nks` monoliths are indexed with fixed-size Latin1 directory records, and protected ones use one of 32 static 16-byte keys applied from the payload's absolute offset; both layouts are handled natively.
-- **Pure Standalone Distribution:** Compiles to a single executable (`NKXTool.exe`). No WCX DLLs, no external dependencies.
+---
 
-## 📋 Requirements & Runtime Files
+## What it can open
 
-### For Usage:
-1. **`NKXTool.exe`** - Standalone executable (incorporates `NKXTool` and `NKXTool.Core`).
-2. **`nklibs.db`** (Optional / Recommended) - Key database for decrypting protected commercial Kontakt libraries. Can be automatically created/updated with `NKXTool update`.
+| Extension | Content |
+|---|---|
+| `.nkx` | Audio samples of a library |
+| `.nkr` | Resources: scripts, images, impulse responses, documentation |
+| `.nicnt` | Library information and artwork |
+| `.nks` | Older, small Kontakt monoliths |
+| `.nki`, `.nkm`, `.nkb`, `.nkg` | Instrument, multiscript, database and group files |
 
-### For Development / Building from source:
-- [.NET 10.0 SDK](https://dotnet.microsoft.com/download)
+Archives that are split across several volumes (`_00.nkx`, `_01.nkx`, ...) are recognised: point the tool at any volume and the whole set is read as one library.
 
-## 🛠️ Usage
+---
 
-Use `NkxTool.exe` with one of the main commands: `list`, `unpack`, `pack`, `update`, `dump`, `nki-infoscan`, or `nki-version`.
+## Features
 
-### 1. List Archive Contents
-Outputs the relative paths of all files contained inside an archive:
+- **List** - show every file contained in an archive, on screen or in a text file.
+- **Extract** - unpack a whole archive, or a selection of its files, into a folder while recreating the original directory tree.
+- **Pack** - build a new archive from a folder, or from a text file listing the files to include; volumes are split automatically at the Kontakt size limit.
+- **Key database** - keep `nklibs.db` up to date so that protected libraries are opened without any manual step. Keys are collected from the libraries installed on the machine and can also be refreshed from Native Instruments.
+- **Inspect patches** - report the Kontakt version a `.nki` instrument was saved with, and scan a patch for its readable text.
+- **Reusable core** - the same engine is exposed as `NKXTool.Core` for use from other .NET programs.
+
+---
+
+## Requirements
+
+- Windows 64-bit.
+- `NKXTool.exe`, nothing else.
+- `nklibs.db` (optional but recommended): the key database used for protected libraries. Create or update it with `NKXTool update`.
+
+---
+
+## Usage
+
+```
+NKXTool <command> [arguments]
+```
+
+| Command | Purpose |
+|---|---|
+| `list` | list the contents of an archive |
+| `unpack` | extract an archive |
+| `pack` | create an archive |
+| `update` | create or refresh the key database |
+| `nki-infoscan` | print the readable text of a `.nki` patch |
+| `nki-version` | print only the Kontakt version of a `.nki` patch |
+
+### List the contents
+
 ```cmd
-NkxTool list <source_file> [outputList.txt]
+NKXTool list <archive> [output.txt]
 
-# Examples:
-NkxTool list "C:\Library\Samples_1.nkx"
-NkxTool list "C:\Library\Samples_1.nkx" "C:\temp\filelist.txt"
+NKXTool list "C:\Library\Samples_00.nkx"
+NKXTool list "C:\Library\Samples_00.nkx" "C:\temp\filelist.txt"
 ```
 
-### 2. Unpack (Decompress)
-Extracts the entire content of an archive into the specified destination folder, recreating the original directory structure:
+### Extract
+
 ```cmd
-NkxTool unpack <source_file> <destinationFolder> [-y]
+NKXTool unpack <archive> <destination> [-y]
 
-# Examples:
-NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\"
-NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\" -y
+NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\"
+NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\" -y
 ```
 
-### 3. Pack (Compress)
-Creates a new archive from a source folder or a text file containing a list of relative paths:
+`-y` overwrites existing files without asking. The destination folder is created if needed.
+
+### Create an archive
+
 ```cmd
-NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]
+NKXTool pack <archive> <folder or @filelist.txt> [root]
 
-# Example A: Pack an entire folder
-NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
-
-# Example B: Pack using a file list
-NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
+NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\"
+NKXTool pack "C:\New\Piano.nkx" "@C:\temp\filelist.txt" "C:\Extracted\"
 ```
 
-### 4. Update Key Database
-Synchronize or generate `nklibs.db` by scanning the system's `NativeAccess.xml` file (or a specified custom XML), or by downloading the current product hints directly from Native Instruments:
+A file list contains one relative path per line, which makes it easy to build an archive from a selection produced by `list`.
+
+### Update the key database
+
 ```cmd
-NkxTool update
-NkxTool update --online
-NkxTool update -f "C:\Path\To\NativeAccess.xml"
+NKXTool update
+NKXTool update --online
+NKXTool update -f "C:\Path\To\NativeAccess.xml"
 ```
 
-`update` merges into the existing database: keys found in the source are added or refreshed, while entries that are absent from the source (for example keys added by hand) are kept. Each ambiguous 3-character SNPID is also stored in its hexadecimal spelling, so archives referencing either notation are decrypted.
+`update` merges into the existing database: keys that are found are added or refreshed, and entries that are not in the current source - keys added by hand, for instance - are kept. Once a library is installed on the machine, `update` is all that is needed before extracting it.
 
-When decrypting, key resolution is layered: the Native Instruments registry first (`HKLM\SOFTWARE\Native Instruments\<Library name>`, looked up by archive name, parent folder name, `ContentDir`/`InstallDir` folder name, `Name`, `SNPID` or `RegKey`), then `nklibs.db` (by archive name, then by parent/grand-parent folder name), then the `.nicnt` file shipped next to the archive. The registry is never modified.
+### Inspect a patch
 
-## 🏗️ Compilation
-
-To compile into a single standalone executable:
-```bash
-dotnet publish NKXTool.csproj -c Release -r win-x64 /p:PublishSingleFile=true
+```cmd
+NKXTool nki-infoscan "C:\Library\Instrument.nki"
+NKXTool nki-version "C:\Library\Instrument.nki"
 ```
-The resulting `NKXTool.exe` is located in `bin\Release\net10.0\win-x64\publish\`.
+
+`nki-version` prints nothing but the version number, so it can be used in scripts.
+
+---
+
+## Building from source
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+
+```cmd
+dotnet publish NKXTool.csproj -c Release -r win-x64 -p:PublishSingleFile=true
+```
+
+The executable is written to `bin\Release\net10.0\win-x64\publish\`.
