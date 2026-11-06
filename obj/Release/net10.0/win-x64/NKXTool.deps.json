@@ -7,31 +7,31 @@
   "targets": {
     ".NETCoreApp,Version=v10.0": {},
     ".NETCoreApp,Version=v10.0/win-x64": {
-      "NKXTool/1.0.0": {
+      "NKXTool/2.0.0": {
         "dependencies": {
-          "NKXTool.Core": "1.0.0"
+          "NKXTool.Core": "2.0.0"
         },
         "runtime": {
           "NKXTool.dll": {}
         }
       },
-      "NKXTool.Core/1.0.0": {
+      "NKXTool.Core/2.0.0": {
         "runtime": {
           "NKXTool.Core.dll": {
-            "assemblyVersion": "1.0.0.0",
-            "fileVersion": "1.0.0.0"
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.0.0.0"
           }
         }
       }
     }
   },
   "libraries": {
-    "NKXTool/1.0.0": {
+    "NKXTool/2.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
     },
-    "NKXTool.Core/1.0.0": {
+    "NKXTool.Core/2.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

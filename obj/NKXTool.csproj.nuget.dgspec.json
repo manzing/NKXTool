@@ -5,7 +5,7 @@
   },
   "projects": {
     "D:\\Docs\\GitHub\\NKXTool\\NKXTool.Core\\NKXTool.Core.csproj": {
-      "version": "1.0.0",
+      "version": "2.0.0",
       "restore": {
         "projectUniqueName": "D:\\Docs\\GitHub\\NKXTool\\NKXTool.Core\\NKXTool.Core.csproj",
         "projectName": "NKXTool.Core",
@@ -345,7 +345,7 @@
       }
     },
     "D:\\Docs\\GitHub\\NKXTool\\NKXTool.csproj": {
-      "version": "1.0.0",
+      "version": "2.0.0",
       "restore": {
         "projectUniqueName": "D:\\Docs\\GitHub\\NKXTool\\NKXTool.csproj",
         "projectName": "NKXTool",
