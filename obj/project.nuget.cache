@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "B50X4i37/og=",
+  "success": true,
+  "projectFilePath": "D:\\Docs\\GitHub\\NKXTool\\NKXTool.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\man\\.nuget\\packages\\microsoft.net.illink.tasks\\10.0.14\\microsoft.net.illink.tasks.10.0.14.nupkg.sha512",
+    "C:\\Users\\man\\.nuget\\packages\\microsoft.netcore.app.runtime.win-x64\\10.0.14\\microsoft.netcore.app.runtime.win-x64.10.0.14.nupkg.sha512",
+    "C:\\Users\\man\\.nuget\\packages\\microsoft.windowsdesktop.app.runtime.win-x64\\10.0.14\\microsoft.windowsdesktop.app.runtime.win-x64.10.0.14.nupkg.sha512",
+    "C:\\Users\\man\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.win-x64\\10.0.14\\microsoft.aspnetcore.app.runtime.win-x64.10.0.14.nupkg.sha512"
+  ],
+  "logs": []
+}
