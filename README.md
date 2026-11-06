@@ -1,94 +1,117 @@
-# NkxTool - Advanced Kontakt Archive CLI Utility
+# NKXTool - Kontakt Archive Tool
 
-NkxTool is a robust, 64-bit command-line utility for managing Native Instruments Kontakt archives. It acts as a specialized wrapper around the `inNKX.wcx64` plugin, allowing you to list files, extract, and seamlessly pack libraries.
+**Version 2.0.0** - fully native engine.
 
-## 🚀 Key Features
+NKXTool is a standalone command-line tool for Windows that works with the archive files shipped with Native Instruments Kontakt libraries: it lists what a library contains, extracts the content to ordinary files, and rebuilds archives from a folder or a file list. It ships as a single executable - no installer, no plugin, no external dependency.
 
-- **Multi-Format Support:** Read and write `.nkx` (Audio/Samples), `.nkr` (Resources/Scripts), and `.nicnt` (Library Info) containers.
-- **Smart Packing (Auto-Split):** Automatically handles the strict 1.95 GB (`2,090,000,000` bytes) size limit of the NKX format. If a source folder exceeds this limit, NkxTool automatically splits the output into `_00.nkx`, `_01.nkx`, etc.
-- **Filelist Support:** Pack archives dynamically using a text file containing relative paths (`@filelist.txt`), perfect for scripted audio conversions or selective repacking.
-- **COM STA Threading:** Fully initializes Windows COM components natively, ensuring the plugin can properly search for decryption keys and generate `.userdb` files.
-- **Update function for internal database:** synced with system NativeAccess.xml with exotic / old library unique support.
-- **Modern Architecture:** Built with C# on .NET 10 (win-x64), completely standalone.
+---
 
-## 📋 Requirements
+## What it can open
 
--   [.NET 10.0 SDK](https://dotnet.microsoft.com/download) (For building from source)
--   `inNKX.wcx64` 64-bit plugin file (Must be placed in the project root before building, or in the same directory as the compiled executable).
+| Extension | Content |
+|---|---|
+| `.nkx` | Audio samples of a library |
+| `.nkr` | Resources: scripts, images, impulse responses, documentation |
+| `.nicnt` | Library information and artwork |
+| `.nks` | Older, small Kontakt monoliths |
+| `.nki`, `.nkm`, `.nkb`, `.nkg` | Instrument, multiscript, database and group files |
 
-## 🛠️ Usage
+Archives that are split across several volumes (`_00.nkx`, `_01.nkx`, ...) are recognised: point the tool at any volume and the whole set is read as one library.
 
-Open your terminal and use `NkxTool.exe` with one of the three main commands: `list`, `unpack`, or `pack`.
+---
 
-### 1. List Archive Contents
-Outputs the relative paths of all files contained inside an archive. You can optionally save this output to a text file.
+## Features
+
+- **List** - show every file contained in an archive, on screen or in a text file.
+- **Extract** - unpack a whole archive, or a selection of its files, into a folder while recreating the original directory tree.
+- **Pack** - build a new archive from a folder, or from a text file listing the files to include; volumes are split automatically at the Kontakt size limit.
+- **Key database** - keep `nklibs.db` up to date so that protected libraries are opened without any manual step. Keys are collected from the libraries installed on the machine and can also be refreshed from Native Instruments.
+- **Inspect patches** - report the Kontakt version a `.nki` instrument was saved with, and scan a patch for its readable text.
+- **Reusable core** - the same engine is exposed as `NKXTool.Core` for use from other .NET programs.
+
+---
+
+## Requirements
+
+- Windows 64-bit.
+- `NKXTool.exe`, nothing else.
+- `nklibs.db` (optional but recommended): the key database used for protected libraries. Create or update it with `NKXTool update`.
+
+---
+
+## Usage
+
+```
+NKXTool <command> [arguments]
+```
+
+| Command | Purpose |
+|---|---|
+| `list` | list the contents of an archive |
+| `unpack` | extract an archive |
+| `pack` | create an archive |
+| `update` | create or refresh the key database |
+| `nki-infoscan` | print the readable text of a `.nki` patch |
+| `nki-version` | print only the Kontakt version of a `.nki` patch |
+
+### List the contents
+
 ```cmd
-NkxTool list <source_file> [outputList.txt]
+NKXTool list <archive> [output.txt]
 
-# Examples:
-NkxTool list "C:\Library\Samples_1.nkx"
-NkxTool list "C:\Library\Samples_1.nkx" "C:\temp\filelist.txt"
+NKXTool list "C:\Library\Samples_00.nkx"
+NKXTool list "C:\Library\Samples_00.nkx" "C:\temp\filelist.txt"
 ```
 
-### 2. Unpack (Decompress)
-Extracts the entire content of an archive into the specified destination folder, recreating the original directory structure.
+### Extract
+
 ```cmd
-NkxTool unpack <source_file> <destinationFolder>
+NKXTool unpack <archive> <destination> [-y]
 
-# Example:
-NkxTool unpack "C:\Library\Samples_1.nkx" "C:\ExtractedSamples\"
+NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\"
+NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\" -y
 ```
 
-### 3. Pack (Compress)
-Creates a new archive from a source folder or a text file containing a list of relative paths.
+`-y` overwrites existing files without asking. The destination folder is created if needed.
+
+### Create an archive
+
 ```cmd
-NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]
+NKXTool pack <archive> <folder or @filelist.txt> [root]
 
-# Example A: Pack an entire folder
-NkxTool pack "C:\NewLibrary\Piano.nkx" "C:\ExtractedSamples\"
-
-# Example B: Pack using a file list (requires '@')
-# If the text file is located alongside the source samples, rootPath is optional.
-NkxTool pack "C:\NewLibrary\Piano.nkx" "@C:\temp\filelist.txt" "C:\ExtractedSamples\"
+NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\"
+NKXTool pack "C:\New\Piano.nkx" "@C:\temp\filelist.txt" "C:\Extracted\"
 ```
-### 4. Update
-Update internal inNKX database file nklibs_info.userdb by syncing with system's NativeAccess.xml.
+
+A file list contains one relative path per line, which makes it easy to build an archive from a selection produced by `list`.
+
+### Update the key database
+
 ```cmd
-NkxTool update
-
-# Example:
-NkxTool update
+NKXTool update
+NKXTool update --online
+NKXTool update -f "C:\Path\To\NativeAccess.xml"
 ```
 
-### 5. Nki-version
-Analyse a NKI instrument and display required Kontakt version
+`update` merges into the existing database: keys that are found are added or refreshed, and entries that are not in the current source - keys added by hand, for instance - are kept. Once a library is installed on the machine, `update` is all that is needed before extracting it.
+
+### Inspect a patch
+
 ```cmd
-NkxTool nki-version <instrument_file>
-
-# Example:
-NkxTool nki-version "C:\Library\Instruments\Piano.nki"
+NKXTool nki-infoscan "C:\Library\Instrument.nki"
+NKXTool nki-version "C:\Library\Instrument.nki"
 ```
 
-## 🏗️ Compilation
+`nki-version` prints nothing but the version number, so it can be used in scripts.
 
-To compile the project into a single, optimized executable:
+---
 
-1. Place your 64-bit `inNKX.wcx` file in the root directory next to `NkxTool.csproj`.
-2. Run the following .NET CLI command:
-```bash
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
+## Building from source
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+
+```cmd
+dotnet publish NKXTool.csproj -c Release -r win-x64 -p:PublishSingleFile=true
 ```
-The compiled `NkxTool.exe` will be located in the `bin\Release\net10.0\win-x64\publish\` directory.
 
-## ⚠️ Notes on Decryption
-NkxTool acts as a bridge. If an archive is protected, the underlying WCX plugin will attempt to locate the decryption key on your Windows system using standard Registry/COM calls. If the library is not properly registered on your system, the files may still extract, but they could be unreadable or empty, depending on the plugin's internal behavior.
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=manzing%2Fnkxtool&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=manzing/nkxtool&type=date&legend=top-left" />
- </picture>
-</a>
+The executable is written to `bin\Release\net10.0\win-x64\publish\`.

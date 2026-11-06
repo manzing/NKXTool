@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="NKXTool.Core.Tests/NKXTool.Core.Tests.csproj" />
+  <Project Path="NKXTool.Core/NKXTool.Core.csproj" />
+  <Project Path="NKXTool.csproj" />
+</Solution>

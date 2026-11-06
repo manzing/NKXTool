@@ -20,3 +20,7 @@
 *.log
 *.lock
 *.psd1
+
+
+*.db
+*.userdb
