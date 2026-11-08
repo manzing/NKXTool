@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("NKXTool.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("2.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("2.0.0+ab99da9c534c12bfd53af0f781baf991a3f3a52b")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("2.0.0+0599e0a54c77d79491db9a40a0dd3a02f2589a55")]
 [assembly: System.Reflection.AssemblyProductAttribute("NKXTool.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("NKXTool.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("2.0.0.0")]
