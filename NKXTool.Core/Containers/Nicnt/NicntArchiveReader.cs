@@ -232,8 +232,6 @@ public sealed class NicntArchiveReader : IArchiveReader
 
         ExtendedPath.CreateDirectory(options.DestinationDirectory);
 
-        var nameMap = new ArchiveNameMap();
-
         var targetEntries = _entries.Where(e => !e.IsDirectory).ToList();
         if (options.SelectedFiles != null)
         {
@@ -256,21 +254,11 @@ public sealed class NicntArchiveReader : IArchiveReader
         // Thread-safe extraction across files
         await Parallel.ForEachAsync(targetEntries, parallelOptions, async (entry, ct) =>
         {
-            // Names holding a character Windows forbids cannot be created as they are, so they are
-            // mapped to an equivalent usable name and the original one is recorded in the name map.
-            string outputRelativePath = options.SanitizeWindowsFileNames
-                ? ArchivePathSanitizer.ToWindowsSafeRelativePath(entry.RelativePath)
-                : entry.RelativePath;
+            // Names holding a character Windows forbids cannot be created as they are: they are
+            // written encoded, and pack decodes them back.
+            string outputRelativePath = ArchivePathCodec.Encode(entry.RelativePath);
 
             string outPath = Path.Combine(options.DestinationDirectory, outputRelativePath);
-
-            if (!string.Equals(outputRelativePath, entry.RelativePath, StringComparison.Ordinal))
-            {
-                lock (nameMap)
-                {
-                    nameMap.Add(outputRelativePath, entry.RelativePath);
-                }
-            }
             string? outDir = Path.GetDirectoryName(outPath);
             if (!string.IsNullOrEmpty(outDir))
                 ExtendedPath.CreateDirectory(outDir);
@@ -343,9 +331,6 @@ public sealed class NicntArchiveReader : IArchiveReader
         }).ConfigureAwait(false);
 
         sw.Stop();
-
-        if (options.WriteNameMap)
-            nameMap.TrySave(options.DestinationDirectory);
 
         return new ExtractionResult
         {

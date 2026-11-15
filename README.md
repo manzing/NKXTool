@@ -53,7 +53,6 @@ NKXTool <command> [arguments]
 | `update` | create or refresh the key database |
 | `nki-infoscan` | print the readable text of a `.nki` patch |
 | `nki-version` | print only the Kontakt version of a `.nki` patch |
-| `namemap` | show or delete the name map of an extracted folder |
 
 ### List the contents
 
@@ -75,9 +74,7 @@ NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\" -y
 
 `-y` overwrites existing files without asking. The destination folder is created if needed.
 
-A name holding a character Windows forbids - a `*`, as some libraries built on macOS contain - is written with `_` in place of that character, since no Windows API can create the original name. The original names are recorded in `nkxtool-names.json` at the root of the destination, and `pack` reads that file back: the archive is rebuilt with the exact names it contained, so the instrument patches still find their samples. Names are never altered inside an archive.
-
-Extracting several archives into the same folder merges their maps instead of replacing the file, so the names recorded by a first extraction survive the next one. When a folder is reused for other content, `NKXTool namemap <folder> --clear` deletes the map, after which `pack` keeps the names exactly as they are on disk. `NKXTool namemap <folder>` prints the recorded mappings.
+A name holding a character Windows forbids - a `*`, as some libraries built on macOS contain - cannot be created as it is, so it is written encoded: the character becomes `%` followed by its two hexadecimal digits (`*` becomes `%2A`, `?` becomes `%3F`, a literal `%` becomes `%25`). `pack` decodes every name it finds, so the archive is rebuilt with exactly the names it contained and the instrument patches still find their samples. Names are never altered inside an archive, and nothing has to travel with the extracted folder: the encoding carries the original name by itself.
 
 ### Create an archive
 
@@ -86,10 +83,9 @@ NKXTool pack <archive> <folder or @filelist.txt> [root]
 
 NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\"
 NKXTool pack "C:\New\Piano.nkx" "@C:\temp\filelist.txt" "C:\Extracted\"
-NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\Samples" --namemap "C:\Extracted\nkxtool-names.json"
 ```
 
-`pack` looks for `nkxtool-names.json` in the source folder and up to three parents, and rebases its keys on the folder being packed, so packing the `Samples` subfolder of an extraction restores the original names just as packing the whole extraction root does. `--namemap` forces a specific map file.
+Packing the `Samples` (or `Resources`) folder of an extraction keeps that name as the root of the container, so it produces the same entry names as packing the whole extraction root.
 
 A file list contains one relative path per line, which makes it easy to build an archive from a selection produced by `list`.
 

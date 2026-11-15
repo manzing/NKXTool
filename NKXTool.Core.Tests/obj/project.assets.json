@@ -394,7 +394,7 @@
           "build/net8.0/xunit.runner.visualstudio.props": {}
         }
       },
-      "NKXTool.Core/1.0.0": {
+      "NKXTool.Core/2.0.0": {
         "type": "project",
         "framework": ".NETCoreApp,Version=v10.0",
         "compile": {
@@ -914,7 +914,7 @@
         "xunit.runner.visualstudio.nuspec"
       ]
     },
-    "NKXTool.Core/1.0.0": {
+    "NKXTool.Core/2.0.0": {
       "type": "project",
       "path": "../NKXTool.Core/NKXTool.Core.csproj",
       "msbuildProject": "../NKXTool.Core/NKXTool.Core.csproj"
@@ -923,7 +923,7 @@
   "projectFileDependencyGroups": {
     "net10.0": [
       "Microsoft.NET.Test.Sdk >= 17.14.1",
-      "NKXTool.Core >= 1.0.0",
+      "NKXTool.Core >= 2.0.0",
       "coverlet.collector >= 6.0.4",
       "xunit >= 2.9.3",
       "xunit.runner.visualstudio >= 3.1.4"
@@ -1011,7 +1011,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.403/PortableRuntimeIdentifierGraph.json",
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.404/PortableRuntimeIdentifierGraph.json",
         "packagesToPrune": {
           "Microsoft.CSharp": "(,4.7.32767]",
           "Microsoft.VisualBasic": "(,10.4.32767]",

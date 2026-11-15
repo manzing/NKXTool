@@ -9,7 +9,7 @@
       "NKXTool.Core.Tests/1.0.0": {
         "dependencies": {
           "Microsoft.NET.Test.Sdk": "17.14.1",
-          "NKXTool.Core": "1.0.0",
+          "NKXTool.Core": "2.0.0",
           "xunit": "2.9.3"
         },
         "runtime": {
@@ -331,11 +331,11 @@
           }
         }
       },
-      "NKXTool.Core/1.0.0": {
+      "NKXTool.Core/2.0.0": {
         "runtime": {
           "NKXTool.Core.dll": {
-            "assemblyVersion": "1.0.0.0",
-            "fileVersion": "1.0.0.0"
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.0.0.0"
           }
         }
       }
@@ -424,7 +424,7 @@
       "path": "xunit.extensibility.execution/2.9.3",
       "hashPath": "xunit.extensibility.execution.2.9.3.nupkg.sha512"
     },
-    "NKXTool.Core/1.0.0": {
+    "NKXTool.Core/2.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
