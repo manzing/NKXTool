@@ -39,6 +39,9 @@ public sealed class NkxArchiveReader : IArchiveReader
     /// </summary>
     private const int LegacyRecordStride = 135;
 
+    /// <summary>Upper bound for the root name of a container, to reject a corrupted offset.</summary>
+    private const int MaxRootNameBytes = 4096;
+
     private const ushort RecordTypeDirectory = 1;
     private const ushort RecordTypeEncryptedFile = 2;
     private const ushort RecordTypeFile = 3;
@@ -135,11 +138,19 @@ public sealed class NkxArchiveReader : IArchiveReader
         stream.ReadExactly(rootHdr);
 
         uint dirChunkOffset = BinaryPrimitives.ReadUInt32LittleEndian(rootHdr.AsSpan(0x18, 4));
-        int rootNameByteLen = (int)dirChunkOffset - 0x1e;
+
+        // The root name follows the 0x1e-byte preamble and can be longer than the rest of the 64-byte
+        // probe: Swing_010.nkx names its root "Additional samples" (38 bytes), which makes the root
+        // header 68 bytes. The name is therefore read from the file, not sliced out of the probe.
+        long rootNameByteLen = (long)dirChunkOffset - 0x1e;
         string rootName = string.Empty;
-        if (rootNameByteLen > 0 && rootNameByteLen < 64)
+        if (rootNameByteLen > 0 && rootNameByteLen % 2 == 0 &&
+            rootNameByteLen <= MaxRootNameBytes && 0x1e + rootNameByteLen <= stream.Length)
         {
-            rootName = Encoding.Unicode.GetString(rootHdr.AsSpan(0x1e, rootNameByteLen)).TrimEnd('\0');
+            byte[] rootNameBytes = new byte[rootNameByteLen];
+            stream.Seek(0x1e, SeekOrigin.Begin);
+            stream.ReadExactly(rootNameBytes);
+            rootName = Encoding.Unicode.GetString(rootNameBytes).TrimEnd('\0');
         }
 
         ParseDirectoryRecursive(stream, dirChunkOffset, rootName, version);
