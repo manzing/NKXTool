@@ -1,3 +1,4 @@
 D:\Docs\GitHub\NKXTool\bin\Release\net10.0\win-x64\publish\NKXTool.pdb
+D:\Docs\GitHub\NKXTool\bin\Release\net10.0\win-x64\publish\nklibs.db
 D:\Docs\GitHub\NKXTool\bin\Release\net10.0\win-x64\publish\NKXTool.Core.pdb
 D:\Docs\GitHub\NKXTool\bin\Release\net10.0\win-x64\publish\NKXTool.exe

@@ -54,6 +54,43 @@ public sealed class NkxKeyDatabase
     }
 
     /// <summary>
+    /// Opens the key database that applies to an archive: the database next to the host
+    /// executable - the one <c>NkxTool update</c> writes - then the ones found beside the archive
+    /// and up to three folders above it. When several files define the same entry the most local
+    /// one wins, so a database copied along with a library is authoritative for that library.
+    /// </summary>
+    public static NkxKeyDatabase LoadForArchive(string archivePath)
+    {
+        var directories = new List<string>();
+
+        void Add(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) return;
+            if (directories.Contains(directory, StringComparer.OrdinalIgnoreCase)) return;
+            directories.Add(directory);
+        }
+
+        Add(AppContext.BaseDirectory);
+        Add(Directory.GetCurrentDirectory());
+
+        string? archiveDirectory = Path.GetDirectoryName(Path.GetFullPath(archivePath));
+        for (int level = 0; level < 4 && !string.IsNullOrEmpty(archiveDirectory); level++)
+        {
+            Add(archiveDirectory);
+            archiveDirectory = Path.GetDirectoryName(archiveDirectory);
+        }
+
+        var database = new NkxKeyDatabase();
+        foreach (string directory in directories)
+        {
+            string path = ResolveDefaultDbPath(directory);
+            if (File.Exists(path)) database.LoadFile(path);
+        }
+
+        return database;
+    }
+
+    /// <summary>
     /// Default location of the NativeAccess.xml file installed by Native Instruments.
     /// </summary>
     public static string ResolveDefaultNativeAccessXmlPath()
@@ -93,6 +130,90 @@ public sealed class NkxKeyDatabase
 
         entry = null;
         return false;
+    }
+
+    /// <summary>
+    /// Keys of libraries whose registered name resembles one of <paramref name="names"/>, closest
+    /// match first. Used when the archive is stored under a folder whose name differs from the
+    /// library name registered in the database, typically through a version number or a suffix.
+    /// These are candidates only: the caller must confirm one actually decrypts the container
+    /// before using it.
+    /// </summary>
+    public IReadOnlyList<NkxKeyEntry> FindSimilarKeys(IEnumerable<string> names)
+    {
+        var wanted = names
+            .Select(NormalizeLibraryName)
+            .Where(name => name.Length >= 4)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (wanted.Count == 0) return Array.Empty<NkxKeyEntry>();
+
+        var scored = new List<(NkxKeyEntry Entry, int Score)>();
+        var seen = new HashSet<NkxKeyEntry>(ReferenceEqualityComparer.Instance);
+
+        foreach (NkxKeyEntry entry in _bySnpid.Values)
+        {
+            if (!seen.Add(entry)) continue;
+
+            int score = 0;
+            foreach (string candidate in wanted)
+            {
+                score = Math.Max(score, ScoreLibraryName(candidate, entry.Snpid));
+                score = Math.Max(score, ScoreLibraryName(candidate, entry.RegKey));
+            }
+
+            if (score > 0) scored.Add((entry, score));
+        }
+
+        return scored
+            .OrderByDescending(match => match.Score)
+            .Select(match => match.Entry)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Rates how closely a registered library name matches a wanted name: 2 for the same library
+    /// once normalized, 1 when one name contains the other ("... Ultimate" and "... Ultimate
+    /// Library"), 0 when they are unrelated.
+    /// </summary>
+    private static int ScoreLibraryName(string wanted, string? registered)
+    {
+        string normalized = NormalizeLibraryName(registered);
+        if (normalized.Length < 4) return 0;
+
+        if (string.Equals(normalized, wanted, StringComparison.Ordinal)) return 2;
+        if (normalized.Contains(wanted, StringComparison.Ordinal) ||
+            wanted.Contains(normalized, StringComparison.Ordinal))
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Reduces a library name to lower-case letters and digits without accents, so that
+    /// "Sunset Choir Ultimate 1.0.1" and "Sunset Choir Ultimate" compare equal: a folder name
+    /// carries the version number that the registered name does not have.
+    /// </summary>
+    private static string NormalizeLibraryName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+
+        var builder = new StringBuilder(name.Length);
+        string decomposed = name.Normalize(NormalizationForm.FormD);
+        foreach (char c in decomposed)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark) continue;
+            if (char.IsLetterOrDigit(c)) builder.Append(char.ToLowerInvariant(c));
+        }
+
+        string result = builder.ToString();
+        int end = result.Length;
+        while (end > 0 && char.IsDigit(result[end - 1])) end--;
+
+        return end == result.Length ? result : result[..end];
     }
 
     public void AddOrUpdate(NkxKeyEntry entry)
