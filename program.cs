@@ -179,6 +179,49 @@ public class Program
             return NkiVersionCommand.Run(nkiPath, verbose);
         }
 
+        if (operation == "namemap")
+        {
+            if (argsList.Count < 2)
+            {
+                Console.WriteLine("Usage: NkxTool namemap <folder> [--clear]");
+                return 1;
+            }
+
+            string folder = Path.GetFullPath(argsList[1]);
+            if (!Directory.Exists(folder))
+            {
+                Console.WriteLine($"Error: The folder '{folder}' does not exist.");
+                return 1;
+            }
+
+            if (argsList.Contains("--clear"))
+            {
+                if (!ArchiveNameMap.Delete(folder))
+                {
+                    Console.WriteLine($"No name map to delete in '{folder}'.");
+                    return 1;
+                }
+
+                Console.WriteLine($"Name map deleted: {Path.Combine(folder, ArchiveNameMap.DefaultFileName)}");
+                return E_SUCCESS;
+            }
+
+            ArchiveNameMap? nameMap = ArchiveNameMap.Load(folder);
+            if (nameMap == null)
+            {
+                Console.WriteLine($"No name map in '{folder}'.");
+                return E_SUCCESS;
+            }
+
+            foreach (var pair in nameMap.Mappings.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"{pair.Key} -> {pair.Value}");
+            }
+
+            Console.WriteLine($"{nameMap.Count} mapped file name(s).");
+            return E_SUCCESS;
+        }
+
         if (argsList.Count < 2)
         {
             ShowUsage();
@@ -251,6 +294,7 @@ public class Program
         Console.WriteLine("  NkxTool dump <instrument.nki> [--out report.txt]");
         Console.WriteLine("  NkxTool nki-infoscan <instrument.nki> [--length N] [--out report.txt]");
         Console.WriteLine("  NkxTool nki-version <instrument.nki> [-v]");
+        Console.WriteLine("  NkxTool namemap <folder> [--clear]");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  NkxTool unpack archive.nkx output_folder");
@@ -267,6 +311,7 @@ public class Program
         Console.WriteLine("  --length N : Number of bytes to scan from the start of the file (nki-infoscan only, default 4096)");
         Console.WriteLine("  --out : Write the report to a file instead of (or in addition to) the console");
         Console.WriteLine("  -v : Verbose mode, lists all version candidates found (nki-version only)");
+        Console.WriteLine("  --clear : Delete the name map of the folder so that a pack keeps the names as they are on disk (namemap only)");
         Console.WriteLine();
         Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks, .nki, .nkm, .nkb, .nkg");
     }

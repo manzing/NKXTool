@@ -59,23 +59,67 @@ public sealed class ArchiveNameMap
             : diskRelativePath;
 
     /// <summary>
-    /// Writes the map at the root of <paramref name="directory"/>. Returns false when there is
-    /// nothing to record, so a plain extraction leaves no extra file behind.
+    /// Writes the map at the root of <paramref name="directory"/>, merging it with the map already
+    /// there. Returns false when there is nothing to record, so a plain extraction leaves no extra
+    /// file behind.
     /// </summary>
     public bool TrySave(string directory)
     {
         if (IsEmpty || string.IsNullOrEmpty(directory)) return false;
 
+        string path = Path.Combine(directory, DefaultFileName);
+
+        // The folder may already hold the map of an earlier extraction: those entries are kept,
+        // otherwise extracting a second archive into the same folder would silently lose the
+        // original name of the entries extracted first. An entry recorded now wins over an older
+        // one carrying the same disk path; when the folder is reused for something else, the whole
+        // map is removed with 'NkxTool namemap <folder> --clear'.
+        var entries = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        ArchiveNameMap? existing = LoadFile(path);
+        if (existing != null)
+        {
+            foreach (var pair in existing._archiveNamesByDiskPath)
+                entries[pair.Key] = pair.Value;
+        }
+
+        foreach (var pair in _archiveNamesByDiskPath)
+            entries[pair.Key] = pair.Value;
+
         var model = new FileModel { Version = FormatVersion };
-        foreach (var pair in _archiveNamesByDiskPath.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        foreach (var pair in entries)
         {
             model.Entries.Add(new EntryModel { Disk = pair.Key, Archive = pair.Value });
         }
-
-        string path = Path.Combine(directory, DefaultFileName);
         try
         {
             File.WriteAllText(ExtendedPath.ForFileSystem(path), JsonSerializer.Serialize(model, SerializerOptions));
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes the map of an extraction folder, so a pack keeps the names as they are on disk.
+    /// Returns false when the folder has no map.
+    /// </summary>
+    public static bool Delete(string directory)
+    {
+        if (string.IsNullOrEmpty(directory)) return false;
+
+        string path = ExtendedPath.ForFileSystem(Path.Combine(directory, DefaultFileName));
+        if (!File.Exists(path)) return false;
+
+        try
+        {
+            File.Delete(path);
             return true;
         }
         catch (IOException)
