@@ -230,7 +230,9 @@ public sealed class NicntArchiveReader : IArchiveReader
         int extracted = 0;
         int skipped = 0;
 
-        Directory.CreateDirectory(options.DestinationDirectory);
+        ExtendedPath.CreateDirectory(options.DestinationDirectory);
+
+        var nameMap = new ArchiveNameMap();
 
         var targetEntries = _entries.Where(e => !e.IsDirectory).ToList();
         if (options.SelectedFiles != null)
@@ -254,12 +256,26 @@ public sealed class NicntArchiveReader : IArchiveReader
         // Thread-safe extraction across files
         await Parallel.ForEachAsync(targetEntries, parallelOptions, async (entry, ct) =>
         {
-            string outPath = Path.Combine(options.DestinationDirectory, entry.RelativePath);
+            // Names holding a character Windows forbids cannot be created as they are, so they are
+            // mapped to an equivalent usable name and the original one is recorded in the name map.
+            string outputRelativePath = options.SanitizeWindowsFileNames
+                ? ArchivePathSanitizer.ToWindowsSafeRelativePath(entry.RelativePath)
+                : entry.RelativePath;
+
+            string outPath = Path.Combine(options.DestinationDirectory, outputRelativePath);
+
+            if (!string.Equals(outputRelativePath, entry.RelativePath, StringComparison.Ordinal))
+            {
+                lock (nameMap)
+                {
+                    nameMap.Add(outputRelativePath, entry.RelativePath);
+                }
+            }
             string? outDir = Path.GetDirectoryName(outPath);
             if (!string.IsNullOrEmpty(outDir))
-                Directory.CreateDirectory(outDir);
+                ExtendedPath.CreateDirectory(outDir);
 
-            if (!options.Overwrite && File.Exists(outPath))
+            if (!options.Overwrite && ExtendedPath.Exists(outPath))
             {
                 Interlocked.Increment(ref skipped);
                 Interlocked.Increment(ref processedCount);
@@ -285,7 +301,7 @@ public sealed class NicntArchiveReader : IArchiveReader
                 sourceStream.Seek(entry.DataOffset, SeekOrigin.Begin);
 
                 using var subStream = new SubReadStream(sourceStream, entry.DataOffset, entry.Size);
-                using var destStream = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous);
+                using var destStream = ExtendedPath.OpenWrite(outPath, options.StreamBufferSize, asynchronous: true);
 
                 await subStream.CopyToAsync(destStream, options.StreamBufferSize, ct).ConfigureAwait(false);
 
@@ -327,6 +343,9 @@ public sealed class NicntArchiveReader : IArchiveReader
         }).ConfigureAwait(false);
 
         sw.Stop();
+
+        if (options.WriteNameMap)
+            nameMap.TrySave(options.DestinationDirectory);
 
         return new ExtractionResult
         {

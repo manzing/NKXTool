@@ -74,6 +74,8 @@ NKXTool unpack "C:\Library\Samples_00.nkx" "C:\Extracted\" -y
 
 `-y` overwrites existing files without asking. The destination folder is created if needed.
 
+A name holding a character Windows forbids - a `*`, as some libraries built on macOS contain - is written with `_` in place of that character, since no Windows API can create the original name. The original names are recorded in `nkxtool-names.json` at the root of the destination, and `pack` reads that file back: the archive is rebuilt with the exact names it contained, so the instrument patches still find their samples. Names are never altered inside an archive.
+
 ### Create an archive
 
 ```cmd

@@ -359,6 +359,10 @@ public class Program
             if (result.IsSuccess)
             {
                 Console.WriteLine($"Success. Packed {result.TotalPackedFiles} file(s) ({result.TotalBytesPacked:N0} bytes) in {result.Elapsed.TotalSeconds:F2}s.");
+                if (result.RestoredNameCount > 0)
+                {
+                    Console.WriteLine($"  Restored the original name of {result.RestoredNameCount} file(s) from {ArchiveNameMap.DefaultFileName}.");
+                }
                 foreach (var vol in result.VolumeFilePaths)
                 {
                     Console.WriteLine($"  Created archive volume: {vol}");
@@ -384,6 +388,16 @@ public class Program
         try
         {
             using var archive = NkxArchive.Open(sourceNkxPath);
+
+            int mappedNameCount = archive.Entries
+                .Count(e => !e.IsDirectory && !ArchivePathSanitizer.IsWindowsSafe(e.RelativePath));
+            if (mappedNameCount > 0)
+            {
+                Console.WriteLine($"Note: {mappedNameCount} file name(s) contain characters Windows cannot store " +
+                                  $"and are written with '{ArchivePathSanitizer.DefaultReplacement}' in their place; " +
+                                  $"their original name is kept in {ArchiveNameMap.DefaultFileName} so that a repack restores it.");
+            }
+
             var options = new ExtractionOptions
             {
                 DestinationDirectory = destinationDirPath,

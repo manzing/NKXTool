@@ -66,7 +66,7 @@ public sealed class NkxArchiveReader : IArchiveReader
         if (!File.Exists(_filePath))
             throw new FileNotFoundException($"Archive container not found: {_filePath}", _filePath);
 
-        _keyDatabase = keyDatabase ?? NkxKeyDatabase.Load();
+        _keyDatabase = keyDatabase ?? NkxKeyDatabase.LoadForArchive(_filePath);
 
         string ext = Path.GetExtension(_filePath).ToLowerInvariant();
         _archiveType = ext switch
@@ -389,6 +389,7 @@ public sealed class NkxArchiveReader : IArchiveReader
     private static bool IsKnownRecordType(ushort type) =>
         type is RecordTypeDirectory or RecordTypeEncryptedFile or RecordTypeFile;
 
+
     /// <summary>
     /// Reads the NUL-terminated Latin1 name of a legacy record, never reaching into the offset and
     /// type fields that follow the fixed-size name area.
@@ -547,14 +548,32 @@ public sealed class NkxArchiveReader : IArchiveReader
                 return foundEntry;
         }
 
-        // 3. The .nicnt file shipped next to the archive (or in the folder above it).
+        // 2b. The same library recorded under another spelling: the folder usually carries a
+        //     version number or a suffix that the registered name does not have. Such a candidate
+        //     is only used once its key decrypts this container, so a look-alike name cannot make
+        //     the reader pick the key of a different library.
+        foreach (var similarEntry in _keyDatabase.FindSimilarKeys(lookupNames))
+        {
+            if (VerifyKeyPlausibility(similarEntry))
+                return similarEntry;
+        }
+
+        // 3. The .nicnt file shipped with the library. It always sits at the library root, while
+        //    the .nkx files live in a content subfolder (usually "Samples"), so the whole folder
+        //    chain is searched. A file whose name matches the archive or its folder is trusted as
+        //    before; any other .nicnt is only accepted once its key is proven to decrypt this
+        //    container, so an unrelated library in the same tree can never silently corrupt the
+        //    extracted audio.
         if (string.IsNullOrEmpty(archiveDir))
             return null;
 
-        foreach (string nicnt in FindNearbyNicntFiles(archiveDir, lookupNames))
+        foreach (var (nicntPath, nameMatched) in FindNearbyNicntFiles(archiveDir, lookupNames))
         {
-            var nicntEntry = TryExtractKeyFromNicnt(nicnt);
-            if (nicntEntry != null) return nicntEntry;
+            var nicntEntry = TryExtractKeyFromNicnt(nicntPath);
+            if (nicntEntry == null) continue;
+
+            if (nameMatched || VerifyKeyPlausibility(nicntEntry))
+                return nicntEntry;
         }
 
         return null;
@@ -592,34 +611,120 @@ public sealed class NkxArchiveReader : IArchiveReader
     }
 
     /// <summary>
-    /// Sibling (and parent folder) <c>.nicnt</c> files whose name matches one of the lookup names.
-    /// Unrelated <c>.nicnt</c> files are ignored: guessing a key would silently corrupt the output.
+    /// <c>.nicnt</c> files that may belong to the library owning the archive, nearest first. The
+    /// files whose name matches one of the lookup names come first and are trusted, because they
+    /// carry the metadata of this very library. Files bearing another name are returned afterwards:
+    /// the caller proves their key against the container before using it. A library keeps its
+    /// .nicnt at its root and its .nkx files in a subfolder such as "Samples", so the archive
+    /// folder and the three folders above it are all examined.
     /// </summary>
-    private static IEnumerable<string> FindNearbyNicntFiles(string archiveDir, List<string> lookupNames)
+    private static IEnumerable<(string Path, bool NameMatched)> FindNearbyNicntFiles(string archiveDir, List<string> lookupNames)
     {
-        var directories = new List<string> { archiveDir };
-        string? parent = Path.GetDirectoryName(archiveDir);
-        if (!string.IsNullOrEmpty(parent))
-            directories.Add(parent);
+        var directories = new List<string>();
+        string? current = archiveDir;
+        for (int level = 0; level < 4 && !string.IsNullOrEmpty(current); level++)
+        {
+            directories.Add(current);
+            current = Path.GetDirectoryName(current);
+        }
 
         foreach (string dir in directories)
         {
-            string[] nicntFiles;
-            try
-            {
-                nicntFiles = Directory.GetFiles(dir, "*.nicnt");
-            }
-            catch (Exception)
-            {
-                continue;
-            }
-
-            foreach (string nicnt in nicntFiles)
+            foreach (string nicnt in GetNicntFiles(dir))
             {
                 if (lookupNames.Contains(Path.GetFileNameWithoutExtension(nicnt), StringComparer.OrdinalIgnoreCase))
-                    yield return nicnt;
+                    yield return (nicnt, true);
             }
         }
+
+        // Files with another name: they are usually one folder above the archive (a library keeps
+        // its .nicnt at its root and its .nkx files in a Samples folder). They are only used when
+        // their key decrypts this container (see VerifyKeyPlausibility).
+        foreach (string dir in directories)
+        {
+            foreach (string nicnt in GetNicntFiles(dir))
+            {
+                if (lookupNames.Contains(Path.GetFileNameWithoutExtension(nicnt), StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                yield return (nicnt, false);
+            }
+        }
+    }
+
+    private static string[] GetNicntFiles(string directory)
+    {
+        try
+        {
+            return Directory.GetFiles(directory, "*.nicnt");
+        }
+        catch (Exception)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// Checks that a candidate key really decrypts this container: the first bytes of a few
+    /// encrypted payloads are decrypted and compared with the headers of the file types a library
+    /// stores (NCW samples, WAV, PNG, PDF, ZIP, XML). A wrong key yields noise, so an unrelated
+    /// .nicnt is never used blindly.
+    /// </summary>
+    private bool VerifyKeyPlausibility(NkxKeyEntry entry)
+    {
+        byte[] keystream;
+        try
+        {
+            keystream = NkxKeystream.CreateKeystream(entry.JdxBytes, entry.HuBytes);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var probes = _entries
+            .Where(e => e.IsEncrypted && !e.IsDirectory && e.KeyIndex > LegacyKeyIndexMax)
+            .Take(4)
+            .ToList();
+
+        if (probes.Count == 0) return false;
+
+        try
+        {
+            using var stream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096);
+            foreach (ArchiveEntry probe in probes)
+            {
+                byte[] head = new byte[16];
+                stream.Seek(probe.DataOffset, SeekOrigin.Begin);
+                int read = stream.Read(head, 0, head.Length);
+                if (read < 5) continue;
+
+                NkxKeystream.ApplyKeystream(keystream, 0, head.AsSpan(0, read));
+                if (LooksLikeStoredFile(head.AsSpan(0, read))) return true;
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>Headers of the file types Kontakt stores inside its archives.</summary>
+    private static bool LooksLikeStoredFile(ReadOnlySpan<byte> head)
+    {
+        if (head.Length < 5) return false;
+
+        // NCW, the compressed sample format used by Kontakt audio payloads.
+        if (head[0] == 0x01 && head[1] == 0xA8 && head[2] == 0x9E && head[3] == 0xD6) return true;
+        if (head[..4].SequenceEqual("RIFF"u8)) return true;
+        if (head[..4].SequenceEqual(new byte[] { 0x89, 0x50, 0x4E, 0x47 })) return true;
+        if (head[..4].SequenceEqual(new byte[] { 0x50, 0x4B, 0x03, 0x04 })) return true;
+        if (head[..4].SequenceEqual("%PDF"u8)) return true;
+        if (head[..5].SequenceEqual("<?xml"u8)) return true;
+
+        return false;
     }
 
     private NkxKeyEntry? TryExtractKeyFromNicnt(string nicntPath)
@@ -716,7 +821,9 @@ public sealed class NkxArchiveReader : IArchiveReader
         int extracted = 0;
         int skipped = 0;
 
-        Directory.CreateDirectory(options.DestinationDirectory);
+        ExtendedPath.CreateDirectory(options.DestinationDirectory);
+
+        var nameMap = new ArchiveNameMap();
 
         var targetEntries = _entries.Where(e => !e.IsDirectory).ToList();
         if (options.SelectedFiles != null)
@@ -739,12 +846,26 @@ public sealed class NkxArchiveReader : IArchiveReader
 
         await Parallel.ForEachAsync(targetEntries, parallelOptions, async (entry, ct) =>
         {
-            string outPath = Path.Combine(options.DestinationDirectory, entry.RelativePath);
+            // Names holding a character Windows forbids (a "*" in a library built on macOS) cannot
+            // be created as they are, so they are mapped to an equivalent usable name.
+            string outputRelativePath = options.SanitizeWindowsFileNames
+                ? ArchivePathSanitizer.ToWindowsSafeRelativePath(entry.RelativePath)
+                : entry.RelativePath;
+
+            string outPath = Path.Combine(options.DestinationDirectory, outputRelativePath);
+
+            if (!string.Equals(outputRelativePath, entry.RelativePath, StringComparison.Ordinal))
+            {
+                lock (nameMap)
+                {
+                    nameMap.Add(outputRelativePath, entry.RelativePath);
+                }
+            }
             string? outDir = Path.GetDirectoryName(outPath);
             if (!string.IsNullOrEmpty(outDir))
-                Directory.CreateDirectory(outDir);
+                ExtendedPath.CreateDirectory(outDir);
 
-            if (!options.Overwrite && File.Exists(outPath))
+            if (!options.Overwrite && ExtendedPath.Exists(outPath))
             {
                 Interlocked.Increment(ref skipped);
                 Interlocked.Increment(ref processedCount);
@@ -768,7 +889,7 @@ public sealed class NkxArchiveReader : IArchiveReader
                 using var sourceStream = new FileStream(_filePath, FileMode.Open, FileAccess.Read, FileShare.Read, options.StreamBufferSize);
                 using var readStream = CreatePayloadStream(sourceStream, entry);
 
-                using (var destStream = new FileStream(outPath, FileMode.Create, FileAccess.Write, FileShare.None, options.StreamBufferSize, FileOptions.Asynchronous))
+                using (var destStream = ExtendedPath.OpenWrite(outPath, options.StreamBufferSize, asynchronous: true))
                 {
                     await readStream.CopyToAsync(destStream, options.StreamBufferSize, ct).ConfigureAwait(false);
                 }
@@ -811,6 +932,9 @@ public sealed class NkxArchiveReader : IArchiveReader
         }).ConfigureAwait(false);
 
         sw.Stop();
+
+        if (options.WriteNameMap)
+            nameMap.TrySave(options.DestinationDirectory);
 
         return new ExtractionResult
         {
