@@ -61,6 +61,20 @@ public class Program
         
         bool overwrite = argsList.Remove("-y") || argsList.Remove("-Y");
 
+        string? nameMapPath = null;
+        int nameMapIndex = argsList.IndexOf("--namemap");
+        if (nameMapIndex >= 0)
+        {
+            if (nameMapIndex + 1 >= argsList.Count || string.IsNullOrWhiteSpace(argsList[nameMapIndex + 1]))
+            {
+                Console.WriteLine("Error: Missing file path after --namemap");
+                return 1;
+            }
+
+            nameMapPath = Path.GetFullPath(argsList[nameMapIndex + 1].Trim());
+            argsList.RemoveRange(nameMapIndex, 2);
+        }
+
         if (argsList.Count < 1)
         {
             ShowUsage();
@@ -268,7 +282,7 @@ public class Program
             else if (operation == "pack" && argsList.Count >= 3)
             {
                 string rootPath = argsList.Count >= 4 ? argsList[3].Trim() : "";
-                return CompressFolder(argsList[2], path1, rootPath);
+                return CompressFolder(argsList[2], path1, rootPath, nameMapPath);
             }
             else
             {
@@ -288,7 +302,7 @@ public class Program
     {
         Console.WriteLine("Usage:");
         Console.WriteLine("  NkxTool unpack <source_file> <destinationFolder> [@filelist.txt] [-y]");
-        Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath]");
+        Console.WriteLine("  NkxTool pack <destination_file> <sourceFolder_OR_@filelist.txt> [rootPath] [--namemap <file>]");
         Console.WriteLine("  NkxTool list <source_file> [outputList.txt]");
         Console.WriteLine("  NkxTool update [-f <NativeAccess.xml path>] [--online]");
         Console.WriteLine("  NkxTool dump <instrument.nki> [--out report.txt]");
@@ -312,6 +326,7 @@ public class Program
         Console.WriteLine("  --out : Write the report to a file instead of (or in addition to) the console");
         Console.WriteLine("  -v : Verbose mode, lists all version candidates found (nki-version only)");
         Console.WriteLine("  --clear : Delete the name map of the folder so that a pack keeps the names as they are on disk (namemap only)");
+        Console.WriteLine("  --namemap <file> : Use this name map instead of looking for nkxtool-names.json up the folder chain (pack only)");
         Console.WriteLine();
         Console.WriteLine("Supported extensions: .nkx, .nkr, .nicnt, .nks, .nki, .nkm, .nkb, .nkg");
     }
@@ -381,7 +396,7 @@ public class Program
     }
 
     // --- COMPRESS / PACK ---
-    private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath)
+    private static int CompressFolder(string sourceOrList, string outputNkxFilePath, string rootPath, string? nameMapPath)
     {
         try
         {
@@ -397,7 +412,8 @@ public class Program
             {
                 OutputFilePath = outputNkxFilePath,
                 SourcePathOrFileList = sourceOrList,
-                RootDirectoryName = rootDirName
+                RootDirectoryName = rootDirName,
+                NameMapPath = nameMapPath
             };
 
             var result = NkxArchiveWriter.PackAsync(options).GetAwaiter().GetResult();
@@ -406,7 +422,16 @@ public class Program
                 Console.WriteLine($"Success. Packed {result.TotalPackedFiles} file(s) ({result.TotalBytesPacked:N0} bytes) in {result.Elapsed.TotalSeconds:F2}s.");
                 if (result.RestoredNameCount > 0)
                 {
-                    Console.WriteLine($"  Restored the original name of {result.RestoredNameCount} file(s) from {ArchiveNameMap.DefaultFileName}.");
+                    Console.WriteLine($"  Restored the original name of {result.RestoredNameCount} file(s) from {result.NameMapPath}.");
+                }
+                else if (result.NameMapPath != null)
+                {
+                    Console.WriteLine($"  Note: {result.NameMapPath} was found but lists none of the packed files.");
+                }
+                else
+                {
+                    Console.WriteLine($"  Note: no {ArchiveNameMap.DefaultFileName} in the source folder or its parents; " +
+                                      $"names are packed as they are on disk (an extracted folder would carry one).");
                 }
                 foreach (var vol in result.VolumeFilePaths)
                 {

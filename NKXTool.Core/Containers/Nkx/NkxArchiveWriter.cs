@@ -14,6 +14,9 @@ public static class NkxArchiveWriter
 {
     public const long DefaultMaxVolumeBytes = 2_090_000_000L; // ~1.95 GB
 
+    /// <summary>Parents searched for a name map above the packed folder.</summary>
+    private const int NameMapSearchDepth = 3;
+
     /// <summary>
     /// Configuration options for packing files into an NKX archive.
     /// </summary>
@@ -48,6 +51,9 @@ public static class NkxArchiveWriter
 
         /// <summary>Entries whose original archive name was restored from the name map.</summary>
         public int RestoredNameCount { get; init; }
+
+        /// <summary>Map file used to restore original names, or null when none was found.</summary>
+        public string? NameMapPath { get; init; }
     }
 
     public static async Task<PackResult> PackAsync(
@@ -105,24 +111,71 @@ public static class NkxArchiveWriter
         // Windows cannot store. Those names go back into the directory records, so the container
         // keeps exactly the names the instrument patches reference; the payload is still read
         // through the disk name, only the record differs.
-        string nameMapPath = !string.IsNullOrWhiteSpace(options.NameMapPath)
-            ? Path.GetFullPath(options.NameMapPath)
-            : Path.Combine(srcBasePath, ArchiveNameMap.DefaultFileName);
+        //
+        // The map sits at the extraction root, which is not always the packed folder: a library keeps
+        // its samples in a "Samples" subfolder one level below. The map is therefore looked up in the
+        // source folder and its parents, and its keys are rebased on the packed folder.
+        string? nameMapPath;
+        if (!string.IsNullOrWhiteSpace(options.NameMapPath))
+        {
+            nameMapPath = Path.GetFullPath(options.NameMapPath);
+            if (!ExtendedPath.Exists(nameMapPath))
+                throw new FileNotFoundException($"Name map not found: {nameMapPath}", nameMapPath);
+        }
+        else
+        {
+            nameMapPath = FindNameMapPath(srcBasePath, NameMapSearchDepth);
+        }
 
-        ArchiveNameMap? nameMap = ArchiveNameMap.LoadFile(nameMapPath);
+        // Keys of a map are relative to the folder that holds it.
+        string nameMapBaseDirectory = nameMapPath != null
+            ? Path.GetDirectoryName(nameMapPath) ?? srcBasePath
+            : srcBasePath;
+
+        ArchiveNameMap? nameMap = nameMapPath != null ? ArchiveNameMap.LoadFile(nameMapPath) : null;
+
+        // Path from the map root down to the packed folder, e.g. "Samples": the map records names
+        // from the extraction root, so every key is rebuilt with this prefix before being resolved.
+        string mapPrefix = string.Empty;
         if (nameMap != null)
         {
-            string fullNameMapPath = Path.GetFullPath(nameMapPath);
+            string relativeBase = Path.GetRelativePath(nameMapBaseDirectory, srcBasePath);
+            if (relativeBase != "." && !relativeBase.StartsWith("..", StringComparison.Ordinal))
+                mapPrefix = relativeBase;
+        }
+
+        // Container root name implied by the map: the first folder below the extraction root.
+        string? mapRootFolder = null;
+        if (mapPrefix.Length > 0)
+        {
+            string firstSegment = mapPrefix.Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+            if (firstSegment.Length > 0) mapRootFolder = firstSegment;
+        }
+
+        if (nameMap != null)
+        {
+            string fullNameMapPath = Path.GetFullPath(nameMapPath!);
             filesToPack.RemoveAll(f => string.Equals(
                 Path.GetFullPath(Path.Combine(srcBasePath, f)), fullNameMapPath, StringComparison.OrdinalIgnoreCase));
         }
+
+        // Key of a packed file in the map, i.e. its path relative to the extraction root.
+        string MapKey(string diskRelativePath) => mapPrefix.Length == 0
+            ? diskRelativePath
+            : mapPrefix + "\\" + diskRelativePath.Replace('/', '\\');
+
+        // Name a file must carry inside the archive, as stored in the map, i.e. relative to the
+        // extraction root. The root-folder strip below then turns it into the directory segments.
+        string ArchivedRelativePath(string diskRelativePath) => nameMap == null
+            ? diskRelativePath
+            : nameMap.Resolve(MapKey(diskRelativePath));
 
         int restoredNameCount = 0;
         if (nameMap != null)
         {
             foreach (string file in filesToPack)
             {
-                if (!string.Equals(nameMap.Resolve(file), file, StringComparison.Ordinal))
+                if (!string.Equals(nameMap.Resolve(MapKey(file)), MapKey(file), StringComparison.Ordinal))
                     restoredNameCount++;
             }
         }
@@ -176,6 +229,11 @@ public static class NkxArchiveWriter
             if (!string.IsNullOrWhiteSpace(options.RootDirectoryName))
             {
                 rootFolder = options.RootDirectoryName;
+            }
+            else if (mapRootFolder != null)
+            {
+                // The map was written above the packed folder: that prefix is the container root.
+                rootFolder = mapRootFolder;
             }
             else
             {
@@ -244,7 +302,7 @@ public static class NkxArchiveWriter
                 }
 
                 // Directory records carry the archive name; the disk name only locates the payload.
-                string cleanName = nameMap?.Resolve(relFile) ?? relFile;
+                string cleanName = ArchivedRelativePath(relFile);
                 if (cleanName.StartsWith(rootFolder + "\\", StringComparison.OrdinalIgnoreCase) ||
                     cleanName.StartsWith(rootFolder + "/", StringComparison.OrdinalIgnoreCase))
                 {
@@ -308,8 +366,28 @@ public static class NkxArchiveWriter
             Elapsed = sw.Elapsed,
             VolumeFilePaths = volumePaths,
             FailedFiles = failedFiles,
-            RestoredNameCount = restoredNameCount
+            RestoredNameCount = restoredNameCount,
+            NameMapPath = nameMapPath
         };
+    }
+
+    /// <summary>
+    /// First folder, starting at <paramref name="sourceDirectory"/>, that holds an
+    /// <see cref="ArchiveNameMap"/>; the search stops after <paramref name="maxParentLevels"/> parents.
+    /// </summary>
+    private static string? FindNameMapPath(string sourceDirectory, int maxParentLevels)
+    {
+        string? current = sourceDirectory;
+
+        for (int level = 0; level <= maxParentLevels && !string.IsNullOrEmpty(current); level++)
+        {
+            string candidate = Path.Combine(current, ArchiveNameMap.DefaultFileName);
+            if (ExtendedPath.Exists(candidate)) return candidate;
+
+            current = Path.GetDirectoryName(current);
+        }
+
+        return null;
     }
 
     /// <summary>

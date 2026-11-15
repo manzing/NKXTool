@@ -86,7 +86,10 @@ NKXTool pack <archive> <folder or @filelist.txt> [root]
 
 NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\"
 NKXTool pack "C:\New\Piano.nkx" "@C:\temp\filelist.txt" "C:\Extracted\"
+NKXTool pack "C:\New\Piano.nkx" "C:\Extracted\Samples" --namemap "C:\Extracted\nkxtool-names.json"
 ```
+
+`pack` looks for `nkxtool-names.json` in the source folder and up to three parents, and rebases its keys on the folder being packed, so packing the `Samples` subfolder of an extraction restores the original names just as packing the whole extraction root does. `--namemap` forces a specific map file.
 
 A file list contains one relative path per line, which makes it easy to build an archive from a selection produced by `list`.
 
