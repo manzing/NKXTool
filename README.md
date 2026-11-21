@@ -1,6 +1,6 @@
 # NKXTool - Kontakt Archive Tool
 
-** Fully native engine since Version 2.1.0**
+**Fully native engine since Version 2.1.0**
 
 NKXTool is a standalone command-line tool for Windows that works with the archive files shipped with Native Instruments Kontakt libraries: it lists what a library contains, extracts the content to ordinary files, and rebuilds archives from a folder or a file list. It ships as a single executable - no installer, no plugin, no external dependency.
 
