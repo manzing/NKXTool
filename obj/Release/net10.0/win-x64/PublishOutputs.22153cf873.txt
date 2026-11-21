@@ -1,3 +1,0 @@
-D:\Docs\GitHub\NKXTool\publish-release\NKXTool.pdb
-D:\Docs\GitHub\NKXTool\publish-release\NKXTool.Core.pdb
-D:\Docs\GitHub\NKXTool\publish-release\NKXTool.exe

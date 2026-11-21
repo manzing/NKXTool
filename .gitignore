@@ -13,6 +13,10 @@
 .config/dotnet-tools.json
 .config/dotnet-tools.local.json
 
+# Release output
+dist/
+publish-output/
+
 # misc
 *.user
 *.suo

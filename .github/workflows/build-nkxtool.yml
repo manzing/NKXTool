@@ -3,10 +3,16 @@ name: Build NkxTool Executable # Nom du workflow affiché sur GitHub
 on:
   push:
     branches:
-      - dev-nki # Déclenche le workflow sur les pushes vers la branche 'main'
+      - main
+    tags:
+      - 'v*'
   pull_request:
     branches:
-      - dev-nki # Déclenche le workflow sur les pull requests vers la branche 'main'
+      - main
+  workflow_dispatch: # Permet de lancer le workflow manuellement
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -19,22 +25,27 @@ jobs:
     - name: Setup .NET SDK # Étape 2: Installer le SDK .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '10.0.x' # Spécifiez la version de .NET que vous utilisez dans NkxTool.csproj
+        dotnet-version: '10.0.x' # Spécifiez la version de .NET que vous utilisez dans NKXTool.csproj
 
     - name: Restore dependencies # Étape 3: Restaurer les packages NuGet
-      run: dotnet restore NkxTool.csproj # Assurez-vous que le chemin est correct si NkxTool.csproj n'est pas à la racine
+      run: dotnet restore NKXTool.csproj
 
     - name: Build and Publish NkxTool # Étape 4: Compiler et publier le projet
-      run: dotnet publish NkxTool.csproj -c Release -p:PlatformTarget=x64 -o publish-output -r win-x64 /p:PublishSingleFile=true --no-restore
+      run: dotnet publish NKXTool.csproj -c Release -p:PlatformTarget=x64 -o publish-output -r win-x64 /p:PublishSingleFile=true --no-restore
       # -c Release: Compile en mode Release
       # -o publish-output: Publie les fichiers dans un dossier nommé 'publish-output'
       # -r win-x64: Cible la plateforme Windows 64 bits
       # /p:PublishSingleFile=true: Crée un seul fichier exécutable
-      # --no-restore: Ignore la restauration des dépendances car déjà faite à l'étape précédente
+      # --no-restore: Ignore la restauration des dépendances car déjà faite à l'étape 3
 
-    - name: Upload NkxTool as Artifact # Étape 5: Télécharger les fichiers compilés comme artefact
+    - name: Create release archive # Étape 5: Créer l'archive de distribution
+      run: |
+        $version = (Get-Item publish-output\NKXTool.exe).VersionInfo.ProductVersion.Split('+')[0]
+        Compress-Archive -Path publish-output\NKXTool.exe, README.md -DestinationPath "publish-output\NKXTool-win-x64-v$version.zip"
+
+    - name: Upload NkxTool as Artifact # Étape 6: Télécharger les fichiers compilés comme artefact
       uses: actions/upload-artifact@v4
       with:
         name: NkxTool-win-x64 # Nom de l'artefact téléchargeable
         path: publish-output/ # Chemin du dossier contenant les fichiers publiés
-        retention-days: 30 # Durée de rétention de l'artefact (optionnel, ici 7 jours)
+        retention-days: 30 # Durée de rétention de l'artefact
